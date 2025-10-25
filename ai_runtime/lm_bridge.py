@@ -52,6 +52,8 @@ PROJECT STATE CONTEXT:
 {context}
 
 USER REQUEST: {user_request}
+
+ACCEPTANCE CRITERIA: {acceptance_criteria}
 """
 
 
@@ -62,7 +64,7 @@ class LMStudioRuntimeSession:
         self.model_name = model_name
         self.lm_base_url = lm_base_url
         self.project_root = Path(project_root)
-        
+
         # Session Management
         self.session_dir = self.project_root / ".ai_sessions"
         self.session_dir.mkdir(exist_ok=True)
@@ -139,51 +141,23 @@ class LMStudioRuntimeSession:
     def intake_mission(self, user_request: str) -> Dict[str, Any]:
         """Process initial mission intake and create module/step"""
         print("\n🎯 Mission Intake...")
-        
-        # Ask AI to analyze the request and suggest module structure
-        intake_prompt = f"""Analyze this development request and suggest a module structure:
 
-REQUEST: {user_request}
+        # Simple parsing of the user_request string
+        lines = user_request.split('\n')
+        title = lines[0].replace("New mission: ", "").strip() if len(lines) > 0 else "Untitled Mission"
+        detail = lines[1].replace("Details: ", "").strip() if len(lines) > 1 else title
+        acceptance_criteria = lines[2].replace("Acceptance Criteria: ", "").strip() if len(lines) > 2 else "No acceptance criteria provided."
 
-Respond with JSON only:
-{{
-  "suggested_module": "module_name",
-  "module_path": "path/in/project",
-  "description": "what this module does",
-  "initial_steps": ["step 1", "step 2", "step 3"]
-}}
-"""
-        
-        response = self._call_lm_studio(intake_prompt)
-        parsed = self._parse_ai_response(response)
-        
-        if not parsed:
-            # Fallback: create generic module
-            module = self.memory.get_or_create_module(
-                name="main",
-                path="./",
-                description=user_request,
-                default_status="active"
-            )
-            step = self.memory.create_step(module["id"], "Main Task", user_request)
-            return {"module": module, "step": step}
-        
-        # Create module from AI suggestion
+        # Fallback: create generic module
         module = self.memory.get_or_create_module(
-            name=parsed["suggested_module"],
-            path=parsed["module_path"],
-            description=parsed["description"],
+            name="main",
+            path="./",
+            description=title,
             default_status="active"
         )
+        step = self.memory.create_step(module["id"], title, detail, acceptance_criteria)
         
-        # Create initial step
-        step = self.memory.create_step(
-            module["id"],
-            "Initial Implementation",
-            user_request
-        )
-        
-        print(f"✅ Created module '{module['name']}' and initial step")
+        print(f"✅ Created module 'main' and initial step")
         return {"module": module, "step": step}
 
     def save_session(self):
@@ -226,9 +200,11 @@ Respond with JSON only:
         context = self.memory.get_context_summary()
         
         # Build prompt with context
+        acceptance_criteria = self.memory.get_step_details(self.current_step_id).get("acceptance_criteria", "Not specified")
         prompt = RUNTIME_SYSTEM_PROMPT.format(
             context=context,
-            user_request=user_request
+            user_request=user_request,
+            acceptance_criteria=acceptance_criteria
         )
         
         # Call LM Studio
@@ -289,6 +265,8 @@ Respond with JSON only:
         # Check if step is complete
         all_successful = all(r["result"].get("success", False) for r in exec_results)
         if all_successful and "next_steps" in ai_plan:
+            step_details = self.memory.get_step_details(self.current_step_id)
+            self.runtime.git_commit_step(step_details["title"])
             # Mark current step as done, clear current_step_id for next iteration
             self.memory.update_step_status(self.current_step_id, "done")
             self.current_step_id = None

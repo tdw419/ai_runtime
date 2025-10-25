@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import ast
+import difflib
 from pathlib import Path
 from typing import Dict, Any, Optional
 from .memory import RuntimeMemory
@@ -165,6 +166,17 @@ class SandboxRuntime:
             # Backup old content
             old_content = full_path.read_text()
             
+            # Pre-modification diff approval
+            diff = self._generate_diff(filepath, old_content, new_content)
+            if diff["lines_changed"] > 10: # Threshold for approval
+                print(f"Proposed changes for {filepath}:")
+                print(diff["diff"])
+                approval = input("Approve these changes? (y/n): ").lower().strip()
+                if approval != 'y':
+                    result = {"success": False, "error": "Changes not approved by user."}
+                    self._record_action("modify_file", result, step_id)
+                    return result
+
             # Write new content
             full_path.write_text(new_content)
             
@@ -271,6 +283,19 @@ class SandboxRuntime:
         except Exception as e:
             return False, str(e)
 
+    def _generate_diff(self, filepath: str, old_content: str, new_content: str) -> Dict[str, Any]:
+        """Generate a unified diff of the changes."""
+        diff = list(difflib.unified_diff(
+            old_content.splitlines(keepends=True),
+            new_content.splitlines(keepends=True),
+            fromfile=filepath,
+            tofile=filepath,
+        ))
+        return {
+            "diff": "".join(diff),
+            "lines_changed": sum(1 for line in diff if line.startswith(('+', '-')) and not line.startswith(('+++', '---')))
+        }
+
     def run_shell(self, command: str, step_id: Optional[int] = None) -> Dict[str, Any]:
         """Execute shell command"""
         # Command checks
@@ -363,3 +388,13 @@ class SandboxRuntime:
                 "success": False,
                 "error": f"Unknown action: {action}"
             }
+
+    def git_commit_step(self, step_title: str) -> Dict[str, Any]:
+        """Commit the current state of the project."""
+        try:
+            subprocess.run(["git", "add", "."], cwd=self.project_root, capture_output=True)
+            commit_message = f"AI Step: {step_title}"
+            subprocess.run(["git", "commit", "-m", commit_message], cwd=self.project_root, capture_output=True)
+            return {"success": True, "message": f"Committed changes for step: {step_title}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}

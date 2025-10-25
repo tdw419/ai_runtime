@@ -102,7 +102,8 @@ def test_database():
             step = memory.create_step(
                 module_id=module["id"],
                 title="Test step",
-                detail="Testing"
+                detail="Testing",
+                acceptance_criteria="It should work"
             )
             
             # Test action logging

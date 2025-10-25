@@ -41,6 +41,7 @@ class RuntimeMemory:
             module_id INTEGER,
             title TEXT,
             detail TEXT,
+            acceptance_criteria TEXT,
             status TEXT,
             created_at TEXT,
             updated_at TEXT,
@@ -154,14 +155,14 @@ class RuntimeMemory:
 
     # ===== STEP/TASK MANAGEMENT =====
     
-    def create_step(self, module_id: int, title: str, detail: str) -> Dict[str, Any]:
+    def create_step(self, module_id: int, title: str, detail: str, acceptance_criteria: str) -> Dict[str, Any]:
         """Create a new step/task"""
         cur = self.conn.cursor()
         now = self._now()
         cur.execute("""
-            INSERT INTO steps (module_id, title, detail, status, created_at, updated_at)
-            VALUES (?, ?, ?, 'pending', ?, ?)
-        """, (module_id, title, detail, now, now))
+            INSERT INTO steps (module_id, title, detail, acceptance_criteria, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'pending', ?, ?)
+        """, (module_id, title, detail, acceptance_criteria, now, now))
         self.conn.commit()
         
         cur.execute("SELECT * FROM steps WHERE id = ?", (cur.lastrowid,))

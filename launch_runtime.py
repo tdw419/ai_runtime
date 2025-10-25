@@ -5,6 +5,7 @@ AI Runtime Launcher - Start an interactive AI development session with persisten
 import os
 import sys
 import requests
+import subprocess
 from pathlib import Path
 from ai_runtime.lm_bridge import LMStudioRuntimeSession
 from ai_runtime.project_templates import apply_template, PROJECT_TEMPLATES
@@ -143,6 +144,11 @@ def main():
     print(f"\n📂 Project workspace: {project_root}")
     print(f"💾 Database: {project_root}/runtime_state.db")
 
+    # Initialize Git repository
+    if not (project_root_path / ".git").exists():
+        print("Initializing Git repository...")
+        subprocess.run(["git", "init"], cwd=project_root, capture_output=True)
+
     # Pick session to resume or start new
     session_id = pick_session(project_root_path)
 
@@ -198,6 +204,8 @@ def main():
     print("   • 'modules' - List all modules and their status")
     print("   • 'template' - Show available project templates")
     print("   • 'sessions' - List and resume previous sessions")
+    print("   • 'mission' - Start a new mission intake")
+    print("   • 'explain' - Explain the AI's current task and goal")
     print("   • 'exit'    - Quit the runtime")
     print("=" * 60)
 
@@ -223,7 +231,7 @@ def main():
                 print("\n🗂️  MODULES:")
                 for mod in status["modules"]:
                     status_icon = {
-                        'frozen': '🔒',
+                        'frozen': '❄️',
                         'active': '✅',
                         'staging': '🚧'
                     }.get(mod['status'], '❓')
@@ -283,9 +291,36 @@ def main():
                 pick_session(project_root_path) # Just show the sessions
                 continue
 
-            # Process AI directive
-            print("🔄 Processing...")
-            result = session.step(user_input)
+            elif user_input.lower() == 'mission':
+                title = input("Step Title: ").strip()
+                detail = input("Step Detail: ").strip()
+                acceptance_criteria = input("Acceptance Criteria: ").strip()
+                user_input = f"New mission: {title}\nDetails: {detail}\nAcceptance Criteria: {acceptance_criteria}"
+                result = session.step(user_input)
+
+            elif user_input.lower() == 'explain':
+                status = session.get_status()
+                if not status["active_steps"]:
+                    print("\n🧠 No active mission. Use the 'mission' command to start one.")
+                    continue
+
+                current_step = status["active_steps"][0]
+                print(f"\n🧠 EXPLAINING CURRENT TASK")
+                print("=" * 60)
+                print(f"TASK: {current_step['title']}")
+                print(f"GOAL: {session.memory.get_step_details(current_step['id']).get('acceptance_criteria')}")
+
+                if status["recent_actions"]:
+                    last_action = status["recent_actions"][0]
+                    success_icon = '✅' if last_action['success'] else '❌'
+                    print(f"LAST ACTION: {success_icon} {last_action['action_type']}")
+                else:
+                    print("LAST ACTION: No actions taken yet for this step.")
+
+            else:
+                # Process AI directive
+                print("🔄 Processing...")
+                result = session.step(user_input)
 
             if not result.get("success"):
                 print(f"\n❌ Step failed: {result.get('error')}")
