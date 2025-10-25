@@ -215,16 +215,10 @@ session.freeze_module("auth")  # AI can't edit auth module
 - Max file size: 50KB
 - Max line changes: 500 lines per edit
 
-### 4. Command Blacklist
-Dangerous shell commands are blocked:
-- `rm -rf`
-- `sudo`
-- `format`
-- etc.
-
-### 5. Execution Timeout
-- Python commands: 30 seconds
-- Shell commands: 60 seconds
+### 4. Docker Sandbox
+- All code is executed within a secure, isolated Docker container.
+- The project directory is mounted as a volume, allowing the AI to modify files directly without rebuilding the image.
+- This provides a consistent and safe execution environment.
 
 ## 💡 Example Session
 
@@ -363,8 +357,8 @@ memory.close()
 - No rollback mechanism (yet)
 
 ### Planned Features
-- [ ] Docker container support
-- [ ] Git integration for versioning
+- [x] Docker container support
+- [x] Git integration for versioning
 - [ ] Web UI dashboard
 - [ ] Multi-model support (switch models mid-session)
 - [ ] Rollback/undo functionality

@@ -151,7 +151,8 @@ def test_sandbox():
                 print("   ⚠️  Dockerfile or requirements.txt not found, skipping sandbox execution test.")
                 return True # Can't test this part, so we'll assume it's ok for now.
 
-            runtime = SandboxRuntime(project_root, memory)
+            # Need to provide a session_id for the test
+            runtime = SandboxRuntime(project_root, memory, "test_session")
             
             # Test file creation
             result = runtime.create_file("test.txt", "Hello, World!")

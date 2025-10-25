@@ -14,13 +14,15 @@ from . import ast_utils
 
 class SandboxRuntime:
     """Executes code in a controlled environment with safety checks"""
-    
-    def __init__(self, project_root: str, memory: RuntimeMemory):
+
+    def __init__(self, project_root: str, memory: RuntimeMemory, session_id: str):
         self.project_root = Path(project_root)
         self.memory = memory
+        self.session_id = session_id
+        self.container_name = f"ai-runtime-sandbox-{self.session_id}"
         self.project_root.mkdir(parents=True, exist_ok=True)
         self.history = []
-        
+
         # Safety limits
         self.max_file_size = 50000  # 50KB max per file
         self.max_line_changes = 500  # Max lines changed in one edit
@@ -30,7 +32,10 @@ class SandboxRuntime:
         build_result = self._build_docker_image()
         if not build_result["success"]:
             print(f"FATAL: Docker image build failed: {build_result.get('stderr')}")
-            # In a real application, this should raise a critical exception.
+            raise RuntimeError("Failed to build Docker image.")
+
+        # Start the stateful container
+        self._start_container()
 
     def _record_action(self, action: str, result: Dict[str, Any], step_id: Optional[int] = None):
         """Record action in history and database"""
@@ -47,7 +52,7 @@ class SandboxRuntime:
     def _check_path_safety(self, filepath: str) -> Dict[str, Any]:
         """Check if path is safe to modify"""
         full_path = self.project_root / filepath
-        
+
         # Check if path tries to escape project root
         try:
             full_path.resolve().relative_to(self.project_root.resolve())
@@ -56,14 +61,14 @@ class SandboxRuntime:
                 "success": False,
                 "error": "Path escapes project root"
             }
-        
+
         # Check if module is frozen
         if self.memory.is_path_frozen(filepath):
             return {
                 "success": False,
                 "error": f"Module containing {filepath} is frozen"
             }
-        
+
         return {"success": True}
 
     def create_file(self, filepath: str, content: str, step_id: Optional[int] = None) -> Dict[str, Any]:
@@ -73,9 +78,9 @@ class SandboxRuntime:
             result = {"success": False, **safety_check}
             self._record_action("create_file", result, step_id)
             return result
-        
+
         full_path = self.project_root / filepath
-        
+
         # Check file size
         if len(content) > self.max_file_size:
             result = {
@@ -84,7 +89,7 @@ class SandboxRuntime:
             }
             self._record_action("create_file", result, step_id)
             return result
-        
+
         try:
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content)
@@ -98,20 +103,20 @@ class SandboxRuntime:
                 "success": False,
                 "error": str(e)
             }
-        
+
         self._record_action("create_file", result, step_id)
         return result
 
     def read_file(self, filepath: str) -> Dict[str, Any]:
         """Read file contents"""
         full_path = self.project_root / filepath
-        
+
         if not full_path.exists():
             return {
                 "success": False,
                 "error": f"File {filepath} does not exist"
             }
-        
+
         try:
             content = full_path.read_text()
             return {
@@ -132,9 +137,9 @@ class SandboxRuntime:
             result = {"success": False, **safety_check}
             self._record_action("modify_file", result, step_id)
             return result
-        
+
         full_path = self.project_root / filepath
-        
+
         if not full_path.exists():
             result = {
                 "success": False,
@@ -142,7 +147,7 @@ class SandboxRuntime:
             }
             self._record_action("modify_file", result, step_id)
             return result
-        
+
         # Check size
         if len(new_content) > self.max_file_size:
             result = {
@@ -151,7 +156,7 @@ class SandboxRuntime:
             }
             self._record_action("modify_file", result, step_id)
             return result
-        
+
         # Diff size cap
         old_content_for_diff = ""
         if full_path.exists():
@@ -176,7 +181,7 @@ class SandboxRuntime:
 
             # Write new content
             full_path.write_text(new_content)
-            
+
             # Syntax gate for Python files
             if filepath.endswith(".py"):
                 ok, msg = self._python_syntax_ok(full_path)
@@ -202,7 +207,7 @@ class SandboxRuntime:
                 "success": False,
                 "error": str(e)
             }
-        
+
         self._record_action("modify_file", result, step_id)
         return result
 
@@ -283,9 +288,9 @@ class SandboxRuntime:
             result = {"success": False, **safety_check}
             self._record_action("delete_file", result, step_id)
             return result
-        
+
         full_path = self.project_root / filepath
-        
+
         try:
             if full_path.exists():
                 full_path.unlink()
@@ -303,7 +308,7 @@ class SandboxRuntime:
                 "success": False,
                 "error": str(e)
             }
-        
+
         self._record_action("delete_file", result, step_id)
         return result
 
@@ -343,12 +348,9 @@ class SandboxRuntime:
     def _build_docker_image(self):
         """Build the Docker image for the sandbox."""
         try:
-            # NOTE: Using 'sudo' as a workaround for environments where the user
-            # is not in the 'docker' group. This is a security trade-off for usability
-            # in this specific execution context.
             subprocess.run(
                 ["sudo", "docker", "build", "-t", "ai-runtime-sandbox", "."],
-                cwd=self.project_root,
+                cwd=Path(__file__).parent.parent, # Build from the root of the project
                 capture_output=True,
                 check=True
             )
@@ -362,11 +364,13 @@ class SandboxRuntime:
             }
 
     def _run_in_docker(self, command: str, step_id: Optional[int] = None) -> Dict[str, Any]:
-        """Helper to run a command in the Docker sandbox."""
+        """Helper to run a command inside the persistent Docker container."""
         try:
-            # NOTE: See comment in _build_docker_image regarding 'sudo'.
             result = subprocess.run(
-                ["sudo", "docker", "run", "--rm", "ai-runtime-sandbox", "sh", "-c", command],
+                [
+                    "sudo", "docker", "exec", self.container_name,
+                    "sh", "-c", command
+                ],
                 capture_output=True,
                 text=True,
                 timeout=60
@@ -389,7 +393,7 @@ class SandboxRuntime:
     def project_tree(self) -> Dict[str, Any]:
         """Get project directory structure"""
         tree = {}
-        
+
         for item in self.project_root.rglob('*'):
             if item.is_file():
                 rel_path = item.relative_to(self.project_root)
@@ -397,14 +401,14 @@ class SandboxRuntime:
             elif item.is_dir() and item != self.project_root:
                 rel_path = item.relative_to(self.project_root)
                 tree[str(rel_path) + '/'] = "dir"
-        
+
         return {"tree": tree}
 
     def execute_directive(self, directive: Dict[str, Any], step_id: Optional[int] = None) -> Dict[str, Any]:
         """Execute a single directive from the AI"""
         action = directive.get("action")
         params = directive.get("parameters", {})
-        
+
         if action == "create_file":
             return self.create_file(params.get("filepath"), params.get("content"), step_id)
         elif action == "read_file":
@@ -438,3 +442,31 @@ class SandboxRuntime:
             return {"success": True, "message": f"Committed changes for step: {step_title}"}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def _start_container(self):
+        """Starts the persistent Docker container for this session."""
+        # Stop any existing container with the same name
+        subprocess.run(["sudo", "docker", "stop", self.container_name], capture_output=True)
+        subprocess.run(["sudo", "docker", "rm", self.container_name], capture_output=True)
+
+        print(f"Starting stateful container: {self.container_name}")
+        try:
+            subprocess.run(
+                [
+                    "sudo", "docker", "run", "-d", "--name", self.container_name,
+                    "-v", f"{self.project_root.resolve()}:/app",
+                    "ai-runtime-sandbox",
+                    "sleep", "infinity"
+                ],
+                check=True,
+                capture_output=True
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"FATAL: Could not start stateful container: {e.stderr.decode()}")
+            raise
+
+    def close(self):
+        """Stops and removes the persistent Docker container."""
+        print(f"Stopping stateful container: {self.container_name}")
+        subprocess.run(["sudo", "docker", "stop", self.container_name], capture_output=True)
+        subprocess.run(["sudo", "docker", "rm", self.container_name], capture_output=True)

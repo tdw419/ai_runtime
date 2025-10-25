@@ -82,7 +82,7 @@ class LMStudioRuntimeSession:
         self.memory = RuntimeMemory(memory_db)
 
         # Initialize sandbox runtime
-        self.runtime = SandboxRuntime(str(self.project_root), self.memory)
+        self.runtime = SandboxRuntime(str(self.project_root), self.memory, self.session_id)
 
         # Initialize code validator
         self.validator = CodeValidator(self.project_root)
@@ -352,4 +352,5 @@ class LMStudioRuntimeSession:
 
     def close(self):
         """Clean up resources"""
+        self.runtime.close()
         self.memory.close()

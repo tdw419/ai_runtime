@@ -310,34 +310,15 @@ if len(content) > MAX_FILE_SIZE:
 - Memory exhaustion attacks
 - Runaway generation
 
-### 4. Command Blacklist
+### 4. Docker Sandbox
 
-```python
-DANGEROUS = ['rm -rf', 'sudo', 'format', 'del /f']
+The runtime uses a stateful Docker container for secure, isolated execution.
 
-if any(danger in command.lower() for danger in DANGEROUS):
-    return {"success": False, "error": "Dangerous command blocked"}
-```
-
-**Prevents:**
-- Data loss
-- Privilege escalation
-- System damage
-
-### 5. Execution Timeouts
-
-```python
-subprocess.run(
-    command,
-    timeout=30,  # 30 seconds for Python
-    # timeout=60  # 60 seconds for shell
-)
-```
-
-**Prevents:**
-- Infinite loops hanging the system
-- Network calls that never return
-- Resource exhaustion
+**Key Features:**
+- **Stateful Container:** A container is started at the beginning of a session and persists until the session is closed.
+- **Volume Mounting:** The project directory is mounted into the container at `/app`. This allows the AI to modify files directly, and the changes are immediately reflected on the host. This is highly performant as it avoids image rebuilding.
+- **Isolation:** All shell and Python commands are run inside this container, preventing any impact on the host system.
+- **Consistent Environment:** The Dockerfile defines a consistent environment with all necessary dependencies, ensuring that code runs the same way every time.
 
 ## 🔄 Iteration Loop
 
@@ -450,7 +431,7 @@ session.step("Create auth.py with tests")
 # → Creates auth.py AND auth_test.py
 ```
 
-### 4. Git Integration
+### 4. Git Integration (Implemented)
 ```python
 # Auto-commit after successful steps
 if all_actions_successful:
