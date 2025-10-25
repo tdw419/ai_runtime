@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from ai_runtime.lm_bridge import LMStudioRuntimeSession
 from ai_runtime.project_templates import apply_template, PROJECT_TEMPLATES
+from ai_runtime.code_validator import CodeValidator
 
 LM_STUDIO_URL = "http://localhost:1234"
 
@@ -316,6 +317,46 @@ def main():
                     print(f"LAST ACTION: {success_icon} {last_action['action_type']}")
                 else:
                     print("LAST ACTION: No actions taken yet for this step.")
+
+            elif user_input.lower() == "validate":
+                print("\n🔬 Running validation suite...")
+                validator = CodeValidator(project_root)
+
+                # Find all Python files, excluding dotfiles/dirs
+                py_files = []
+                for root, _, files in os.walk(project_root):
+                    # Skip dot directories
+                    if any(part.startswith('.') for part in Path(root).relative_to(project_root_path).parts):
+                        continue
+                    for file in files:
+                        if file.endswith(".py"):
+                            py_files.append(os.path.relpath(os.path.join(root, file), project_root))
+
+                errors = []
+                print(f"Found {len(py_files)} Python files to check.")
+
+                for file_path in py_files:
+                    print(f"  - Linting {file_path}...")
+                    lint_result = validator.run_lint(file_path)
+                    if not lint_result["success"]:
+                        errors.append(f"Linting Error in {file_path}:\n{lint_result['errors']}\n")
+
+                test_dir = project_root_path / "tests"
+                if test_dir.exists() and test_dir.is_dir():
+                    print("  - Running tests...")
+                    test_result = validator.run_tests("tests/")
+                    if not test_result["success"]:
+                        errors.append(f"Test Failures:\n{test_result.get('stderr') or test_result.get('stdout')}\n")
+                else:
+                    print("  - No 'tests' directory found, skipping tests.")
+
+                if errors:
+                    print("\n❌ Validation Failed:")
+                    for error in errors:
+                        print(error)
+                else:
+                    print("\n✅ All validation checks passed!")
+                continue
 
             else:
                 # Process AI directive

@@ -19,6 +19,8 @@ Available actions:
 - "create_file": {"filepath": "path/to/file.py", "content": "file contents"}
 - "read_file": {"filepath": "path/to/file.py"}
 - "modify_file": {"filepath": "path/to/file.py", "new_content": "updated contents"}
+- "add_import_ast": {"filepath": "path/to/file.py", "module_name": "os", "alias": "os_alias"}
+- "add_function_ast": {"filepath": "path/to/file.py", "function_code": "def my_func(): pass"}
 - "delete_file": {"filepath": "path/to/file.py"}
 - "run_python": {"command": "print('hello')"}
 - "run_shell": {"command": "pip install flask"}
@@ -59,7 +61,7 @@ ACCEPTANCE CRITERIA: {acceptance_criteria}
 
 class LMStudioRuntimeSession:
     """Manages an interactive session with LM Studio and the runtime"""
-    
+
     def __init__(self, model_name: str, lm_base_url: str, project_root: str, session_id: Optional[str] = None):
         self.model_name = model_name
         self.lm_base_url = lm_base_url
@@ -78,10 +80,10 @@ class LMStudioRuntimeSession:
         # Initialize memory system
         memory_db = str(self.project_root / "runtime_state.db")
         self.memory = RuntimeMemory(memory_db)
-        
+
         # Initialize sandbox runtime
         self.runtime = SandboxRuntime(str(self.project_root), self.memory)
-        
+
         # Initialize code validator
         self.validator = CodeValidator(self.project_root)
 
@@ -111,13 +113,13 @@ class LMStudioRuntimeSession:
                 },
                 timeout=60
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
                 return data["choices"][0]["message"]["content"]
             else:
                 return f"Error: Status {response.status_code}"
-        
+
         except Exception as e:
             return f"Error calling LM Studio: {str(e)}"
 
@@ -133,32 +135,55 @@ class LMStudioRuntimeSession:
                 start = response.find("```") + 3
                 end = response.find("```", start)
                 response = response[start:end].strip()
-            
+
             return json.loads(response)
         except json.JSONDecodeError:
             return None
 
     def intake_mission(self, user_request: str) -> Dict[str, Any]:
-        """Process initial mission intake and create module/step"""
-        print("\n🎯 Mission Intake...")
+        """Process initial mission intake, generate a plan, and create steps."""
+        print("\n🎯 Mission Intake & Planning...")
 
-        # Simple parsing of the user_request string
         lines = user_request.split('\n')
         title = lines[0].replace("New mission: ", "").strip() if len(lines) > 0 else "Untitled Mission"
         detail = lines[1].replace("Details: ", "").strip() if len(lines) > 1 else title
         acceptance_criteria = lines[2].replace("Acceptance Criteria: ", "").strip() if len(lines) > 2 else "No acceptance criteria provided."
 
-        # Fallback: create generic module
-        module = self.memory.get_or_create_module(
-            name="main",
-            path="./",
-            description=title,
-            default_status="active"
-        )
-        step = self.memory.create_step(module["id"], title, detail, acceptance_criteria)
-        
-        print(f"✅ Created module 'main' and initial step")
-        return {"module": module, "step": step}
+        planning_prompt = f"""
+        Based on the following mission, decompose it into a series of smaller, verifiable sub-steps.
+        Do not generate code. Only generate the plan.
+
+        MISSION: {title}
+        DETAILS: {detail}
+        ACCEPTANCE CRITERIA: {acceptance_criteria}
+
+        Respond with JSON only, in the format:
+        {{
+          "plan": [
+            {{"title": "Sub-step 1", "detail": "Description of sub-step 1"}},
+            {{"title": "Sub-step 2", "detail": "Description of sub-step 2"}}
+          ]
+        }}
+        """
+
+        response = self._call_lm_studio(planning_prompt)
+        plan_data = self._parse_ai_response(response)
+
+        if not plan_data or "plan" not in plan_data:
+            # Fallback to a single step if planning fails
+            module = self.memory.get_or_create_module("main", "./", title, "active")
+            step = self.memory.create_step(module["id"], title, detail, acceptance_criteria)
+            print("✅ Planning failed. Created a single step for the mission.")
+            return {"module": module, "steps": [step]}
+
+        module = self.memory.get_or_create_module("main", "./", title, "active")
+        steps = []
+        for sub_step in plan_data["plan"]:
+            step = self.memory.create_step(module["id"], sub_step["title"], sub_step["detail"], acceptance_criteria)
+            steps.append(step)
+
+        print(f"✅ AI generated a plan with {len(steps)} steps.")
+        return {"module": module, "steps": steps}
 
     def save_session(self):
         """Save the current session state to a JSON file."""
@@ -189,16 +214,27 @@ class LMStudioRuntimeSession:
 
     def step(self, user_request: str) -> Dict[str, Any]:
         """Execute one development step"""
-        
+
         # Get or create step for this request
         if not self.current_step_id:
             intake_result = self.intake_mission(user_request)
-            self.current_step_id = intake_result["step"]["id"]
+            if not intake_result.get("steps"):
+                return {"success": False, "error": "Mission intake failed to produce steps."}
+            self.current_step_id = intake_result["steps"][0]["id"]
             self.memory.update_step_status(self.current_step_id, "in_progress")
-        
+
+        # Get the next pending step
+        next_step = self.memory.get_next_step()
+        if not next_step:
+            print("🎉 All steps completed!")
+            return {"success": True, "message": "All steps completed!"}
+
+        self.current_step_id = next_step["id"]
+        self.memory.update_step_status(self.current_step_id, "in_progress")
+
         # Get current project context
         context = self.memory.get_context_summary()
-        
+
         # Build prompt with context
         acceptance_criteria = self.memory.get_step_details(self.current_step_id).get("acceptance_criteria", "Not specified")
         prompt = RUNTIME_SYSTEM_PROMPT.format(
@@ -206,20 +242,20 @@ class LMStudioRuntimeSession:
             user_request=user_request,
             acceptance_criteria=acceptance_criteria
         )
-        
+
         # Call LM Studio
         response = self._call_lm_studio(prompt)
-        
+
         # Parse response
         ai_plan = self._parse_ai_response(response)
-        
+
         if not ai_plan:
             return {
                 "success": False,
                 "error": "Failed to parse AI response as JSON",
                 "raw": response
             }
-        
+
         # Execute directives
         exec_results = []
         for directive in ai_plan.get("directives", []):
@@ -246,20 +282,34 @@ class LMStudioRuntimeSession:
                 "directive": directive,
                 "result": result
             })
-        
-        # Validation step
+
+        # Validation step (Critique Turn)
         validation_errors = []
-        for directive in ai_plan.get("directives", []):
-            if directive.get("action") in ["create_file", "modify_file"]:
-                filepath = directive.get("parameters", {}).get("filepath")
-                if filepath and filepath.endswith(".py"):
-                    validation_result = self.validator.check_syntax(filepath)
-                    if not validation_result["success"]:
-                        validation_errors.append(validation_result["error"])
+        files_to_validate = [
+            d.get("parameters", {}).get("filepath")
+            for d in ai_plan.get("directives", [])
+            if d.get("action") in ["create_file", "modify_file"] and d.get("parameters", {}).get("filepath", "").endswith(".py")
+        ]
+
+        for filepath in files_to_validate:
+            syntax_result = self.validator.check_syntax(filepath)
+            if not syntax_result["success"]:
+                validation_errors.append(f"Syntax Error in {filepath}: {syntax_result['error']}")
+
+            lint_result = self.validator.run_lint(filepath)
+            if not lint_result["success"]:
+                validation_errors.append(f"Linting Error in {filepath}: {lint_result['errors']}")
+
+        # For now, we'll assume a conventional test path. This could be made more robust.
+        test_path = "tests/"
+        if any(f.startswith("tests/") for f in files_to_validate):
+             test_result = self.validator.run_tests(test_path)
+             if not test_result["success"]:
+                 validation_errors.append(f"Test Failure in {test_path}: {test_result.get('stderr', 'No output')}")
 
         if validation_errors:
-            # If validation fails, send the errors back to the AI to fix
-            error_message = "The following errors were found in the code you just wrote. Please fix them:\n" + "\n".join(validation_errors)
+            # If validation fails, send the errors back to the AI to fix (Correction Turn)
+            error_message = "The previous changes failed validation. Please fix the following errors:\n" + "\n".join(validation_errors)
             return self.step(error_message)
 
         # Check if step is complete
@@ -270,7 +320,7 @@ class LMStudioRuntimeSession:
             # Mark current step as done, clear current_step_id for next iteration
             self.memory.update_step_status(self.current_step_id, "done")
             self.current_step_id = None
-        
+
         self.save_session() # Save session state after each step
 
         return {

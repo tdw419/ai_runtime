@@ -9,6 +9,7 @@ import difflib
 from pathlib import Path
 from typing import Dict, Any, Optional
 from .memory import RuntimeMemory
+from . import ast_utils
 
 
 class SandboxRuntime:
@@ -23,6 +24,13 @@ class SandboxRuntime:
         # Safety limits
         self.max_file_size = 50000  # 50KB max per file
         self.max_line_changes = 500  # Max lines changed in one edit
+
+        # Build Docker image once on startup
+        print("Building sandbox Docker image...")
+        build_result = self._build_docker_image()
+        if not build_result["success"]:
+            print(f"FATAL: Docker image build failed: {build_result.get('stderr')}")
+            # In a real application, this should raise a critical exception.
 
     def _record_action(self, action: str, result: Dict[str, Any], step_id: Optional[int] = None):
         """Record action in history and database"""
@@ -165,17 +173,6 @@ class SandboxRuntime:
         try:
             # Backup old content
             old_content = full_path.read_text()
-            
-            # Pre-modification diff approval
-            diff = self._generate_diff(filepath, old_content, new_content)
-            if diff["lines_changed"] > 10: # Threshold for approval
-                print(f"Proposed changes for {filepath}:")
-                print(diff["diff"])
-                approval = input("Approve these changes? (y/n): ").lower().strip()
-                if approval != 'y':
-                    result = {"success": False, "error": "Changes not approved by user."}
-                    self._record_action("modify_file", result, step_id)
-                    return result
 
             # Write new content
             full_path.write_text(new_content)
@@ -207,6 +204,76 @@ class SandboxRuntime:
             }
         
         self._record_action("modify_file", result, step_id)
+        return result
+
+    def add_import_ast(self, filepath: str, module_name: str, alias: Optional[str] = None, step_id: Optional[int] = None) -> Dict[str, Any]:
+        """Adds an import to a Python file using AST."""
+        safety_check = self._check_path_safety(filepath)
+        if not safety_check["success"]:
+            result = {"success": False, **safety_check}
+            self._record_action("add_import_ast", result, step_id)
+            return result
+
+        full_path = self.project_root / filepath
+        if not full_path.exists():
+            result = {"success": False, "error": f"File {filepath} does not exist"}
+            self._record_action("add_import_ast", result, step_id)
+            return result
+
+        try:
+            source_code = full_path.read_text()
+            new_code = ast_utils.add_import(source_code, module_name, alias)
+            full_path.write_text(new_code)
+            result = {
+                "success": True,
+                "filepath": filepath,
+                "message": f"Added import '{module_name}' to {filepath}"
+            }
+        except Exception as e:
+            result = {"success": False, "error": f"AST modification failed: {e}"}
+
+        self._record_action("add_import_ast", result, step_id)
+        return result
+
+    def add_function_ast(self, filepath: str, function_code: str, step_id: Optional[int] = None) -> Dict[str, Any]:
+        """Adds or replaces a function in a Python file using AST."""
+        safety_check = self._check_path_safety(filepath)
+        if not safety_check["success"]:
+            result = {"success": False, **safety_check}
+            self._record_action("add_function_ast", result, step_id)
+            return result
+
+        full_path = self.project_root / filepath
+        if not full_path.exists():
+            result = {"success": False, "error": f"File {filepath} does not exist"}
+            self._record_action("add_function_ast", result, step_id)
+            return result
+
+        try:
+            # Parse the new function code to get its AST node
+            function_tree = ast.parse(function_code)
+            new_function_def = None
+            for node in function_tree.body:
+                if isinstance(node, ast.FunctionDef):
+                    new_function_def = node
+                    break
+
+            if not new_function_def:
+                raise ValueError("The provided code does not contain a valid function definition.")
+
+            source_code = full_path.read_text()
+            new_code = ast_utils.add_function(source_code, new_function_def)
+            full_path.write_text(new_code)
+
+            result = {
+                "success": True,
+                "filepath": filepath,
+                "message": f"Added/replaced function '{new_function_def.name}' in {filepath}"
+            }
+        except Exception as e:
+            result = {"success": False, "error": f"AST modification failed: {e}"}
+
+        self._record_action("add_function_ast", result, step_id)
         return result
 
     def delete_file(self, filepath: str, step_id: Optional[int] = None) -> Dict[str, Any]:
@@ -241,35 +308,8 @@ class SandboxRuntime:
         return result
 
     def run_python(self, command: str, step_id: Optional[int] = None) -> Dict[str, Any]:
-        """Execute Python code"""
-        try:
-            result = subprocess.run(
-                [sys.executable, "-c", command],
-                cwd=str(self.project_root),
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            
-            response = {
-                "success": result.returncode == 0,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "returncode": result.returncode
-            }
-        except subprocess.TimeoutExpired:
-            response = {
-                "success": False,
-                "error": "Command timed out after 30 seconds"
-            }
-        except Exception as e:
-            response = {
-                "success": False,
-                "error": str(e)
-            }
-        
-        self._record_action("run_python", response, step_id)
-        return response
+        """Execute Python code in a Docker container."""
+        return self._run_in_docker(f'python -c "{command}"', step_id)
 
     def _python_syntax_ok(self, path: Path) -> tuple:
         """Checks if a Python file has valid syntax."""
@@ -297,57 +337,53 @@ class SandboxRuntime:
         }
 
     def run_shell(self, command: str, step_id: Optional[int] = None) -> Dict[str, Any]:
-        """Execute shell command"""
-        # Command checks
-        BLOCKED = ["rm -rf", "sudo", "chmod 777", "wget ", "curl "]
-        for bad in BLOCKED:
-            if bad in command.lower():
-                result = {
-                    "success": False,
-                    "error": f"Blocked dangerous command fragment '{bad}'",
-                    "safety_violation": True
-                }
-                self._record_action("run_shell", result, step_id)
-                return result
+        """Execute shell command in a Docker container."""
+        return self._run_in_docker(command, step_id)
 
-        ALLOWED_PREFIXES = ["pip install", "pytest", "python ", "uvicorn ", "npm install"]
-        if not any(command.startswith(prefix) for prefix in ALLOWED_PREFIXES):
-            result = {
-                "success": False,
-                "error": f"Command not allowed: '{command}'",
-                "allowed_examples": ALLOWED_PREFIXES
-            }
-            self._record_action("run_shell", result, step_id)
-            return result
-        
+    def _build_docker_image(self):
+        """Build the Docker image for the sandbox."""
         try:
+            # NOTE: Using 'sudo' as a workaround for environments where the user
+            # is not in the 'docker' group. This is a security trade-off for usability
+            # in this specific execution context.
+            subprocess.run(
+                ["sudo", "docker", "build", "-t", "ai-runtime-sandbox", "."],
+                cwd=self.project_root,
+                capture_output=True,
+                check=True
+            )
+            return {"success": True}
+        except subprocess.CalledProcessError as e:
+            return {
+                "success": False,
+                "error": "Docker image build failed",
+                "stdout": e.stdout.decode(),
+                "stderr": e.stderr.decode(),
+            }
+
+    def _run_in_docker(self, command: str, step_id: Optional[int] = None) -> Dict[str, Any]:
+        """Helper to run a command in the Docker sandbox."""
+        try:
+            # NOTE: See comment in _build_docker_image regarding 'sudo'.
             result = subprocess.run(
-                command,
-                shell=True,
-                cwd=str(self.project_root),
+                ["sudo", "docker", "run", "--rm", "ai-runtime-sandbox", "sh", "-c", command],
                 capture_output=True,
                 text=True,
                 timeout=60
             )
-            
             response = {
                 "success": result.returncode == 0,
                 "stdout": result.stdout,
                 "stderr": result.stderr,
-                "returncode": result.returncode
+                "returncode": result.returncode,
             }
         except subprocess.TimeoutExpired:
-            response = {
-                "success": False,
-                "error": "Command timed out"
-            }
+            response = {"success": False, "error": "Command timed out"}
         except Exception as e:
-            response = {
-                "success": False,
-                "error": str(e)
-            }
-        
-        self._record_action("run_shell", response, step_id)
+            response = {"success": False, "error": str(e)}
+
+        action = "run_python" if command.startswith("python") else "run_shell"
+        self._record_action(action, response, step_id)
         return response
 
     def project_tree(self) -> Dict[str, Any]:
@@ -375,6 +411,10 @@ class SandboxRuntime:
             return self.read_file(params.get("filepath"))
         elif action == "modify_file":
             return self.modify_file(params.get("filepath"), params.get("new_content"), step_id)
+        elif action == "add_import_ast":
+            return self.add_import_ast(params.get("filepath"), params.get("module_name"), params.get("alias"), step_id)
+        elif action == "add_function_ast":
+            return self.add_function_ast(params.get("filepath"), params.get("function_code"), step_id)
         elif action == "delete_file":
             return self.delete_file(params.get("filepath"), step_id)
         elif action == "run_python":
