@@ -9,6 +9,8 @@ from datetime import datetime
 from .memory import RuntimeMemory
 from .sandbox import SandboxRuntime
 from .code_validator import CodeValidator
+from .git_manager import GitManager
+from .test_generator import TestGenerator
 
 
 RUNTIME_SYSTEM_PROMPT = """You are an AI development agent operating in a RUNTIME ENVIRONMENT.
@@ -65,7 +67,7 @@ class LMStudioRuntimeSession:
     def __init__(self, model_name: str, lm_base_url: str, project_root: str, session_id: Optional[str] = None):
         self.model_name = model_name
         self.lm_base_url = lm_base_url
-        self.project_root = Path(project_root)
+        self.project_root = Path(project_root).resolve()
 
         # Session Management
         self.session_dir = self.project_root / ".ai_sessions"
@@ -78,14 +80,17 @@ class LMStudioRuntimeSession:
             self.session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         # Initialize memory system
-        memory_db = str(self.project_root / "runtime_state.db")
-        self.memory = RuntimeMemory(memory_db)
+        self.memory = RuntimeMemory(project_root)
 
         # Initialize sandbox runtime
         self.runtime = SandboxRuntime(str(self.project_root), self.memory, self.session_id)
 
         # Initialize code validator
         self.validator = CodeValidator(self.project_root)
+
+        # Initialize Git Manager and Test Generator
+        self.git_manager = GitManager(str(self.project_root))
+        self.test_generator = TestGenerator(str(self.project_root))
 
         # Current step being worked on
         self.current_step_id = None
@@ -118,10 +123,10 @@ class LMStudioRuntimeSession:
                 data = response.json()
                 return data["choices"][0]["message"]["content"]
             else:
-                return f"Error: Status {response.status_code}"
+                return f'{{"error": "Status {response.status_code}"}}'
 
         except Exception as e:
-            return f"Error calling LM Studio: {str(e)}"
+            return f'{{"error": "Error calling LM Studio: {str(e)}"}}'
 
     def _parse_ai_response(self, response: str) -> Optional[Dict[str, Any]]:
         """Parse AI response as JSON"""
@@ -213,116 +218,90 @@ class LMStudioRuntimeSession:
         # Note: project_root should match, but we don't enforce it here
 
     def step(self, user_request: str) -> Dict[str, Any]:
-        """Execute one development step"""
+        """Execute one development step with Git transactions and auto-testing."""
 
-        # Get or create step for this request
+        # 1. Get the next pending step or create one
         if not self.current_step_id:
-            intake_result = self.intake_mission(user_request)
-            if not intake_result.get("steps"):
-                return {"success": False, "error": "Mission intake failed to produce steps."}
-            self.current_step_id = intake_result["steps"][0]["id"]
-            self.memory.update_step_status(self.current_step_id, "in_progress")
+            next_step = self.memory.get_next_step()
+            if not next_step:
+                intake_result = self.intake_mission(user_request)
+                if not intake_result.get("steps"):
+                    return {"success": False, "error": "Mission intake failed to produce steps."}
+                self.current_step_id = intake_result["steps"][0]["id"]
+            else:
+                self.current_step_id = next_step["id"]
 
-        # Get the next pending step
-        next_step = self.memory.get_next_step()
-        if not next_step:
-            print("🎉 All steps completed!")
-            return {"success": True, "message": "All steps completed!"}
-
-        self.current_step_id = next_step["id"]
         self.memory.update_step_status(self.current_step_id, "in_progress")
+        step_details = self.memory.get_step_details(self.current_step_id)
 
-        # Get current project context
+        # 2. Start a new Git branch for this step
+        self.git_manager.begin_step(self.current_step_id, step_details["title"])
+
+        # 3. Build prompt and call AI
         context = self.memory.get_context_summary()
-
-        # Build prompt with context
-        acceptance_criteria = self.memory.get_step_details(self.current_step_id).get("acceptance_criteria", "Not specified")
+        acceptance_criteria = step_details.get("acceptance_criteria", "Not specified")
         prompt = RUNTIME_SYSTEM_PROMPT.format(
             context=context,
             user_request=user_request,
             acceptance_criteria=acceptance_criteria
         )
-
-        # Call LM Studio
         response = self._call_lm_studio(prompt)
-
-        # Parse response
         ai_plan = self._parse_ai_response(response)
 
         if not ai_plan:
-            return {
-                "success": False,
-                "error": "Failed to parse AI response as JSON",
-                "raw": response
-            }
+            self.git_manager.complete_step(self.current_step_id, success=False) # Rollback
+            return {"success": False, "error": "Failed to parse AI response", "raw": response}
 
-        # Execute directives
+        # 4. Execute directives
         exec_results = []
+        files_modified = []
         for directive in ai_plan.get("directives", []):
-            action = directive.get("action")
-            params = directive.get("parameters", {})
+            result = self.runtime.execute_directive(directive, self.current_step_id)
+            exec_results.append({"directive": directive, "result": result})
+            if result.get("success") and directive.get("action") in ["create_file", "modify_file"]:
+                files_modified.append(directive["parameters"]["filepath"])
 
-            if action == "modify_file":
-                filepath = params.get("filepath")
-                if filepath not in self.recent_reads:
-                    result = {
-                        "success": False,
-                        "error": f"Safety violation: You must read '{filepath}' before modifying it.",
-                        "safety_violation": True
-                    }
-                else:
-                    result = self.runtime.execute_directive(directive, self.current_step_id)
-            else:
-                result = self.runtime.execute_directive(directive, self.current_step_id)
+        # 5. Auto-generate tests
+        for filepath in files_modified:
+            if self.test_generator.should_generate_tests(filepath, "create_file"):
+                code = self.runtime.read_file(filepath).get("content", "")
+                analysis = self.test_generator.analyze_code_for_testing(filepath, code)
+                if analysis.get("needs_tests"):
+                    test_code = self.test_generator.generate_test_file(analysis)
+                    test_path = f"tests/test_{Path(filepath).name}"
+                    test_gen_result = self.runtime.create_file(test_path, test_code, self.current_step_id)
+                    exec_results.append({
+                        "directive": {"action": "auto_generate_tests", "parameters": {"for": filepath}},
+                        "result": test_gen_result
+                    })
 
-            if action == "read_file" and result.get("success"):
-                self.recent_reads.add(params.get("filepath"))
-
-            exec_results.append({
-                "directive": directive,
-                "result": result
-            })
-
-        # Validation step (Critique Turn)
-        validation_errors = []
-        files_to_validate = [
-            d.get("parameters", {}).get("filepath")
-            for d in ai_plan.get("directives", [])
-            if d.get("action") in ["create_file", "modify_file"] and d.get("parameters", {}).get("filepath", "").endswith(".py")
-        ]
-
-        for filepath in files_to_validate:
-            syntax_result = self.validator.check_syntax(filepath)
-            if not syntax_result["success"]:
-                validation_errors.append(f"Syntax Error in {filepath}: {syntax_result['error']}")
-
-            lint_result = self.validator.run_lint(filepath)
-            if not lint_result["success"]:
-                validation_errors.append(f"Linting Error in {filepath}: {lint_result['errors']}")
-
-        # For now, we'll assume a conventional test path. This could be made more robust.
-        test_path = "tests/"
-        if any(f.startswith("tests/") for f in files_to_validate):
-             test_result = self.validator.run_tests(test_path)
-             if not test_result["success"]:
-                 validation_errors.append(f"Test Failure in {test_path}: {test_result.get('stderr', 'No output')}")
-
-        if validation_errors:
-            # If validation fails, send the errors back to the AI to fix (Correction Turn)
-            error_message = "The previous changes failed validation. Please fix the following errors:\n" + "\n".join(validation_errors)
-            return self.step(error_message)
-
-        # Check if step is complete
+        # 6. Validation (Critique Turn)
         all_successful = all(r["result"].get("success", False) for r in exec_results)
-        if all_successful and "next_steps" in ai_plan:
-            step_details = self.memory.get_step_details(self.current_step_id)
-            self.runtime.git_commit_step(step_details["title"])
-            # Mark current step as done, clear current_step_id for next iteration
+        validation_errors = []
+        if all_successful:
+            lint_result = self.validator.run_lint(".")
+            if not lint_result["success"]:
+                validation_errors.append(f"Linting failed: {lint_result['errors']}")
+
+            test_result = self.validator.run_tests("tests/")
+            if not test_result["success"]:
+                validation_errors.append(f"Tests failed: {test_result.get('stderr')}")
+
+        # 7. Complete or Rollback Step
+        if all_successful and not validation_errors:
             self.memory.update_step_status(self.current_step_id, "done")
-            self.current_step_id = None
+            self.git_manager.complete_step(self.current_step_id, success=True)
+            self.current_step_id = None # Move to next step in next iteration
+        else:
+            self.git_manager.complete_step(self.current_step_id, success=False)
+            error_message = "Execution or validation failed. Rolling back changes."
+            if validation_errors:
+                error_message += "\nValidation Errors:\n" + "\n".join(validation_errors)
+            # In a more advanced version, we would feed this back to the AI. For now, we just roll back.
+            self.memory.update_step_status(self.current_step_id, "blocked")
+            return {"success": False, "error": error_message, "execution_results": exec_results}
 
-        self.save_session() # Save session state after each step
-
+        self.save_session()
         return {
             "success": True,
             "ai_reasoning": ai_plan.get("reasoning", ""),

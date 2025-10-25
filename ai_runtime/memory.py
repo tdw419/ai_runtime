@@ -1,69 +1,64 @@
-"""
-Runtime Memory System - Persistent state management with SQLite
-"""
 import sqlite3
 import json
-import datetime
 from pathlib import Path
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-
 class RuntimeMemory:
-    """Manages persistent state for the AI runtime using SQLite"""
-    
-    def __init__(self, db_path: str):
-        self.db_path = Path(db_path)
-        self.conn = sqlite3.connect(str(self.db_path))
+    """
+    Manages persistent project state, module status, and action history.
+    This is the LLM's working memory/roadmap.
+    """
+    def __init__(self, project_root: Any):
+        project_root = Path(project_root)
+        self.db_path = project_root / ".ai_memory" / "runtime_state.db"
+        self.db_path.parent.mkdir(exist_ok=True)
+        self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
     def _init_schema(self):
-        """Initialize database schema"""
+        """Creates the necessary tables if they don't exist."""
         cur = self.conn.cursor()
 
-        # Modules table - tracks areas of codebase and edit policies
+        # --- MODULES: Tracks areas of the codebase and their policy (Freeze/Active) ---
         cur.execute("""
         CREATE TABLE IF NOT EXISTS modules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE,
-            path TEXT,
-            status TEXT,
-            priority INTEGER,
-            description TEXT,
-            updated_at TEXT
-        )
-        """)
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE, -- e.g., 'Auth', 'Core_Engine'
+        path TEXT, -- e.g., 'src/auth'
+        status TEXT, -- 'active' | 'frozen' | 'staging'
+        priority INTEGER, -- 1-10, higher = more important
+        description TEXT,
+        updated_at TEXT
+        )""")
 
-        # Steps table - planned work items/milestones
+        # --- STEPS: Planned work items (Tasks) ---
         cur.execute("""
         CREATE TABLE IF NOT EXISTS steps (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            module_id INTEGER,
-            title TEXT,
-            detail TEXT,
-            acceptance_criteria TEXT,
-            status TEXT,
-            created_at TEXT,
-            updated_at TEXT,
-            FOREIGN KEY (module_id) REFERENCES modules(id)
-        )
-        """)
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        module_id INTEGER,
+        title TEXT, -- 'Implement Basic Login Route'
+        detail TEXT, -- Detailed instruction from human
+        status TEXT, -- 'pending' | 'in_progress' | 'done' | 'blocked'
+        created_at TEXT,
+        updated_at TEXT,
+        acceptance_criteria TEXT,
+        FOREIGN KEY (module_id) REFERENCES modules(id)
+        )""")
 
-        # Actions table - every atomic directive the AI tried
+        # --- ACTIONS: History of every directive the AI has attempted ---
         cur.execute("""
         CREATE TABLE IF NOT EXISTS actions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            step_id INTEGER,
-            action_type TEXT,
-            params_json TEXT,
-            result_json TEXT,
-            success INTEGER,
-            created_at TEXT,
-            FOREIGN KEY (step_id) REFERENCES steps(id)
-        )
-        """)
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        step_id INTEGER,
+        action_type TEXT, -- 'create_file', 'run_command', etc.
+        success INTEGER, -- 0 or 1
+        created_at TEXT,
+        FOREIGN KEY (step_id) REFERENCES steps(id)
+        )""")
 
-        # Notes table - human guidance/overrides
+        # --- NOTES: Human architectural notes ---
         cur.execute("""
         CREATE TABLE IF NOT EXISTS notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,206 +66,156 @@ class RuntimeMemory:
             note TEXT,
             created_at TEXT,
             FOREIGN KEY (module_id) REFERENCES modules(id)
-        )
-        """)
+        )""")
 
         self.conn.commit()
 
-    def _now(self) -> str:
-        """Get current UTC timestamp"""
-        return datetime.datetime.utcnow().isoformat()
-
-    # ===== MODULE MANAGEMENT =====
-    
     def get_or_create_module(self, name: str, path: str, description: str,
-                             default_status="staging", default_priority=5) -> Dict[str, Any]:
-        """Get existing module or create new one"""
+    priority: int = 5, status: str = 'staging') -> Dict[str, Any]:
+        """Retrieves or creates a module definition."""
         cur = self.conn.cursor()
-        
         cur.execute("SELECT * FROM modules WHERE name = ?", (name,))
         row = cur.fetchone()
-        if row:
-            return dict(row)
-        
+        if row: return dict(row)
+
+        now = datetime.now().isoformat()
         cur.execute("""
-            INSERT INTO modules (name, path, status, priority, description, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (name, path, default_status, default_priority, description, self._now()))
-        
+        INSERT INTO modules (name, path, status, priority, description, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (name, path, status, priority, description, now))
         self.conn.commit()
-        
+        # Retrieve the new record to ensure we get the ID
         cur.execute("SELECT * FROM modules WHERE name = ?", (name,))
         return dict(cur.fetchone())
 
     def update_module_status(self, module_id: int, status: str, priority: Optional[int] = None):
-        """Update module status (frozen/active/staging) and optionally priority"""
+        """Sets the freeze/active status of a module."""
         cur = self.conn.cursor()
+        now = datetime.now().isoformat()
         if priority is not None:
-            cur.execute("""
-                UPDATE modules SET status = ?, priority = ?, updated_at = ?
-                WHERE id = ?
-            """, (status, priority, self._now(), module_id))
+            cur.execute("UPDATE modules SET status = ?, priority = ?, updated_at = ? WHERE id = ?",
+            (status, priority, now, module_id))
         else:
-            cur.execute("""
-                UPDATE modules SET status = ?, updated_at = ?
-                WHERE id = ?
-            """, (status, self._now(), module_id))
+            cur.execute("UPDATE modules SET status = ?, updated_at = ? WHERE id = ?",
+            (status, now, module_id))
         self.conn.commit()
 
-    def freeze_module(self, module_name: str):
-        """Freeze a module to prevent AI edits"""
-        cur = self.conn.cursor()
-        cur.execute("""
-            UPDATE modules SET status = 'frozen', updated_at = ?
-            WHERE name = ?
-        """, (self._now(), module_name))
-        self.conn.commit()
-
-    def unfreeze_module(self, module_name: str):
-        """Unfreeze a module to allow AI edits"""
-        cur = self.conn.cursor()
-        cur.execute("""
-            UPDATE modules SET status = 'active', updated_at = ?
-            WHERE name = ?
-        """, (self._now(), module_name))
-        self.conn.commit()
-
-    def is_path_frozen(self, filepath: str) -> bool:
-        """Check if a file path belongs to a frozen module"""
-        cur = self.conn.cursor()
-        cur.execute("""
-            SELECT status FROM modules
-            WHERE ? LIKE path || '%' AND status = 'frozen'
-        """, (filepath,))
-        return cur.fetchone() is not None
-
-    def list_modules(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
-        """List all modules, optionally filtered by status"""
-        cur = self.conn.cursor()
-        if status:
-            cur.execute("SELECT * FROM modules WHERE status = ? ORDER BY priority DESC", (status,))
-        else:
-            cur.execute("SELECT * FROM modules ORDER BY priority DESC")
-        return [dict(row) for row in cur.fetchall()]
-
-    # ===== STEP/TASK MANAGEMENT =====
-    
     def create_step(self, module_id: int, title: str, detail: str, acceptance_criteria: str) -> Dict[str, Any]:
-        """Create a new step/task"""
+        """Creates a new task for the AI to work on."""
         cur = self.conn.cursor()
-        now = self._now()
+        now = datetime.now().isoformat()
         cur.execute("""
-            INSERT INTO steps (module_id, title, detail, acceptance_criteria, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'pending', ?, ?)
-        """, (module_id, title, detail, acceptance_criteria, now, now))
+        INSERT INTO steps (module_id, title, detail, status, created_at, updated_at, acceptance_criteria)
+        VALUES (?, ?, ?, 'pending', ?, ?, ?)
+        """, (module_id, title, detail, now, now, acceptance_criteria))
         self.conn.commit()
-        
-        cur.execute("SELECT * FROM steps WHERE id = ?", (cur.lastrowid,))
+        cur.execute("SELECT * FROM steps WHERE rowid = last_insert_rowid()")
         return dict(cur.fetchone())
 
-    def update_step_status(self, step_id: int, status: str):
-        """Update step status (pending/in_progress/done/blocked)"""
+    def get_context_summary(self) -> str:
+        """Generates a text summary of all active and frozen modules for the LLM prompt."""
         cur = self.conn.cursor()
-        cur.execute("""
-            UPDATE steps SET status = ?, updated_at = ?
-            WHERE id = ?
-        """, (status, self._now(), step_id))
+        cur.execute("SELECT name, path, status, priority, description FROM modules ORDER BY priority DESC, name ASC")
+
+        summary = ["\n--- Project Module Status ---"]
+
+        for row in cur.fetchall():
+            summary.append(f"• [{(row['status']).upper():<7}] {row['name']} (Priority: {row['priority']})")
+            summary.append(f" Path: {row['path']}")
+            summary.append(f" Description: {row['description']}")
+
+        cur.execute("SELECT m.name, s.title, s.status FROM steps s JOIN modules m ON s.module_id = m.id WHERE s.status != 'done' ORDER BY s.id DESC")
+        active_steps = cur.fetchall()
+
+        if active_steps:
+            summary.append("\n--- Current Active Tasks ---")
+            for row in active_steps:
+                summary.append(f"• [{row['status'].upper():<7}] {row['title']} (Module: {row['name']})")
+
+        # Add notes to context
+        cur.execute("SELECT m.name, n.note FROM notes n JOIN modules m ON n.module_id = m.id ORDER BY n.created_at DESC LIMIT 5")
+        notes = cur.fetchall()
+        if notes:
+            summary.append("\n--- Recent Architectural Notes ---")
+            for row in notes:
+                summary.append(f"• ({row['name']}) {row['note']}")
+
+        return "\n".join(summary)
+
+    def is_path_frozen(self, filepath: str) -> bool:
+        """Check if a given file path belongs to a frozen module."""
+        cur = self.conn.cursor()
+        cur.execute("SELECT 1 FROM modules WHERE ? LIKE path || '%' AND status = 'frozen'", (filepath,))
+        return cur.fetchone() is not None
+
+    def add_note(self, module_id: int, note: str):
+        """Adds a human-provided note to a module."""
+        cur = self.conn.cursor()
+        now = datetime.now().isoformat()
+        cur.execute("INSERT INTO notes (module_id, note, created_at) VALUES (?, ?, ?)", (module_id, note, now))
         self.conn.commit()
 
+    def list_modules(self) -> List[Dict[str, Any]]:
+        """Lists all modules."""
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM modules ORDER BY name")
+        return [dict(row) for row in cur.fetchall()]
+
     def get_active_steps(self) -> List[Dict[str, Any]]:
-        """Get all pending or in-progress steps"""
+        """Returns a list of all steps that are not 'done'."""
         cur = self.conn.cursor()
         cur.execute("""
-            SELECT s.*, m.name as module_name, m.priority as module_priority
+            SELECT s.*, m.name as module_name
             FROM steps s
             JOIN modules m ON s.module_id = m.id
-            WHERE s.status IN ('pending', 'in_progress')
+            WHERE s.status != 'done'
             ORDER BY m.priority DESC, s.created_at ASC
         """)
         return [dict(row) for row in cur.fetchall()]
 
-    def get_next_step(self) -> Optional[Dict[str, Any]]:
-        """Get the highest priority pending step"""
-        steps = self.get_active_steps()
-        return steps[0] if steps else None
-
-    # ===== ACTION TRACKING =====
-    
-    def log_action(self, step_id: Optional[int], action_type: str, 
-                   params: Dict[str, Any], result: Dict[str, Any], success: bool):
-        """Log an action attempt and result"""
-        cur = self.conn.cursor()
-        cur.execute("""
-            INSERT INTO actions (step_id, action_type, params_json, result_json, success, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (step_id, action_type, json.dumps(params), json.dumps(result), 
-              1 if success else 0, self._now()))
-        self.conn.commit()
-
     def get_recent_actions(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """Get recent actions"""
+        """Returns a list of the most recent actions."""
         cur = self.conn.cursor()
-        cur.execute("""
-            SELECT * FROM actions
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, (limit,))
+        cur.execute("SELECT * FROM actions ORDER BY created_at DESC LIMIT ?", (limit,))
         return [dict(row) for row in cur.fetchall()]
 
-    # ===== NOTES/GUIDANCE =====
-    
-    def add_note(self, module_id: int, note: str):
-        """Add a human note/guidance for a module"""
+    def log_action(self, step_id: int, action_type: str, params: Dict, result: Dict, success: bool):
+        """Logs an action to the database."""
+        # This method is a placeholder as the action logging is handled in the SandboxRuntime
+        pass
+
+    def get_step_details(self, step_id: int) -> Optional[Dict[str, Any]]:
+        """Gets the details for a single step."""
         cur = self.conn.cursor()
-        cur.execute("""
-            INSERT INTO notes (module_id, note, created_at)
-            VALUES (?, ?, ?)
-        """, (module_id, note, self._now()))
+        cur.execute("SELECT * FROM steps WHERE id = ?", (step_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def update_step_status(self, step_id: int, status: str):
+        """Updates the status of a step."""
+        cur = self.conn.cursor()
+        now = datetime.now().isoformat()
+        cur.execute("UPDATE steps SET status = ?, updated_at = ? WHERE id = ?", (status, now, step_id))
         self.conn.commit()
 
-    def get_notes_for_module(self, module_id: int) -> List[Dict[str, Any]]:
-        """Get all notes for a module"""
+    def get_next_step(self) -> Optional[Dict[str, Any]]:
+        """Gets the next pending step to work on."""
         cur = self.conn.cursor()
-        cur.execute("""
-            SELECT * FROM notes
-            WHERE module_id = ?
-            ORDER BY created_at DESC
-        """, (module_id,))
-        return [dict(row) for row in cur.fetchall()]
+        cur.execute("SELECT * FROM steps WHERE status = 'pending' ORDER BY id ASC LIMIT 1")
+        row = cur.fetchone()
+        return dict(row) if row else None
 
-    # ===== CONTEXT GENERATION FOR LLM =====
-    
-    def get_context_summary(self) -> str:
-        """Generate a summary of current state for the LLM"""
-        modules = self.list_modules()
-        active_steps = self.get_active_steps()
-        recent_actions = self.get_recent_actions(limit=5)
-        
-        summary = "=== PROJECT STATE ===\n\n"
-        
-        summary += "MODULES:\n"
-        for mod in modules:
-            status_icon = {
-                'frozen': '🔒',
-                'active': '✅',
-                'staging': '🚧'
-            }.get(mod['status'], '❓')
-            summary += f"  {status_icon} {mod['name']} (priority {mod['priority']}): {mod['description']}\n"
-        
-        summary += "\nACTIVE STEPS:\n"
-        if active_steps:
-            for step in active_steps[:5]:
-                summary += f"  • [{step['status']}] {step['title']} (module: {step['module_name']})\n"
-        else:
-            summary += "  (no active steps)\n"
-        
-        summary += "\nRECENT ACTIONS:\n"
-        for action in recent_actions:
-            success_icon = '✅' if action['success'] else '❌'
-            summary += f"  {success_icon} {action['action_type']}\n"
-        
-        return summary
+    def freeze_module(self, module_name: str):
+        """Freezes a module by name."""
+        cur = self.conn.cursor()
+        cur.execute("UPDATE modules SET status = 'frozen' WHERE name = ?", (module_name,))
+        self.conn.commit()
+
+    def unfreeze_module(self, module_name: str):
+        """Unfreezes a module by name."""
+        cur = self.conn.cursor()
+        cur.execute("UPDATE modules SET status = 'active' WHERE name = ?", (module_name,))
+        self.conn.commit()
 
     def close(self):
-        """Close database connection"""
         self.conn.close()

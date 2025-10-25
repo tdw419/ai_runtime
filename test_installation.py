@@ -5,6 +5,7 @@ Checks that everything is installed and configured correctly
 """
 import sys
 import os
+from pathlib import Path
 
 def test_python_version():
     """Check Python version"""
@@ -88,8 +89,7 @@ def test_database():
         
         # Create temp database
         with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = os.path.join(tmpdir, "test.db")
-            memory = RuntimeMemory(db_path)
+            memory = RuntimeMemory(Path(tmpdir))
             
             # Test module creation
             module = memory.get_or_create_module(
@@ -133,11 +133,11 @@ def test_sandbox():
         import tempfile
         
         with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = os.path.join(tmpdir, "test.db")
-            memory = RuntimeMemory(db_path)
-            
-            project_root = os.path.join(tmpdir, "project")
+            project_root = Path(tmpdir) / "project"
             os.makedirs(project_root, exist_ok=True)
+
+            # Initialize memory with the project root directory
+            memory = RuntimeMemory(project_root)
 
             # Copy Dockerfile and requirements.txt to temp project root so the build works
             import shutil

@@ -207,6 +207,7 @@ def main():
     print("   • 'sessions' - List and resume previous sessions")
     print("   • 'mission' - Start a new mission intake")
     print("   • 'explain' - Explain the AI's current task and goal")
+    print("   • 'validate' - Run validation suite on the project")
     print("   • 'exit'    - Quit the runtime")
     print("=" * 60)
 
