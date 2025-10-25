@@ -4,6 +4,7 @@ Sandbox Runtime - Safe code execution environment with module protection
 import os
 import subprocess
 import sys
+import ast
 from pathlib import Path
 from typing import Dict, Any, Optional
 from .memory import RuntimeMemory
@@ -149,6 +150,19 @@ class SandboxRuntime:
             # Write new content
             full_path.write_text(new_content)
             
+            # Syntax gate for Python files
+            if filepath.endswith(".py"):
+                ok, msg = self._python_syntax_ok(full_path)
+                if not ok:
+                    full_path.write_text(old_content) # Auto-revert
+                    result = {
+                        "success": False,
+                        "error": f"Syntax check failed: {msg}",
+                        "reverted": True
+                    }
+                    self._record_action("modify_file", result, step_id)
+                    return result
+
             result = {
                 "success": True,
                 "filepath": filepath,
@@ -227,14 +241,38 @@ class SandboxRuntime:
         self._record_action("run_python", response, step_id)
         return response
 
+    def _python_syntax_ok(self, path: Path) -> tuple:
+        """Checks if a Python file has valid syntax."""
+        try:
+            with open(path, 'r') as f:
+                source = f.read()
+            ast.parse(source)
+            return True, "ok"
+        except SyntaxError as e:
+            return False, f"line {e.lineno}: {e.msg}"
+        except Exception as e:
+            return False, str(e)
+
     def run_shell(self, command: str, step_id: Optional[int] = None) -> Dict[str, Any]:
         """Execute shell command"""
-        # Dangerous commands check
-        dangerous = ['rm -rf', 'sudo', 'format', 'del /f']
-        if any(danger in command.lower() for danger in dangerous):
+        # Command checks
+        BLOCKED = ["rm -rf", "sudo", "chmod 777", "wget ", "curl "]
+        for bad in BLOCKED:
+            if bad in command.lower():
+                result = {
+                    "success": False,
+                    "error": f"Blocked dangerous command fragment '{bad}'",
+                    "safety_violation": True
+                }
+                self._record_action("run_shell", result, step_id)
+                return result
+
+        ALLOWED_PREFIXES = ["pip install", "pytest", "python ", "uvicorn ", "npm install"]
+        if not any(command.startswith(prefix) for prefix in ALLOWED_PREFIXES):
             result = {
                 "success": False,
-                "error": "Dangerous command blocked"
+                "error": f"Command not allowed: '{command}'",
+                "allowed_examples": ALLOWED_PREFIXES
             }
             self._record_action("run_shell", result, step_id)
             return result
