@@ -1,0 +1,46 @@
+================================================================================
+                     AI RUNTIME SYSTEM - GETTING STARTED
+================================================================================
+
+QUICK START
+-----------
+
+1. Install LM Studio from https://lmstudio.ai/
+2. Load a coding model (Qwen2.5-Coder-7B recommended)
+3. Start the Local Server in LM Studio
+4. Install Python dependency: pip install requests
+5. Run: python launch_runtime.py
+
+FIRST COMMAND
+-------------
+you> Create a Flask web server with user authentication
+
+That's it! The AI will create files, install packages, and test everything.
+
+KEY COMMANDS
+------------
+status          - Show current state
+tree            - Show project files  
+modules         - List all modules
+freeze [name]   - Protect a module
+unfreeze [name] - Allow edits
+exit            - Quit
+
+EXAMPLE
+-------
+you> Create a todo list app with Flask
+you> Add REST API endpoints
+you> freeze todo_app
+you> Add HTML templates
+
+FILES TO READ
+-------------
+README.md       - Complete documentation
+QUICKSTART.md   - Detailed setup guide
+HOW_IT_WORKS.md - Architecture explained
+
+TROUBLESHOOTING
+---------------
+Run: python test_installation.py
+
+This verifies Python version, imports, LM Studio connection, and components.
