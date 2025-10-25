@@ -89,7 +89,8 @@ def test_database():
         
         # Create temp database
         with tempfile.TemporaryDirectory() as tmpdir:
-            memory = RuntimeMemory(Path(tmpdir))
+            db_path = Path(tmpdir) / "test_db.sqlite"
+            memory = RuntimeMemory(db_path)
             
             # Test module creation
             module = memory.get_or_create_module(
@@ -102,8 +103,7 @@ def test_database():
             step = memory.create_step(
                 module_id=module["id"],
                 title="Test step",
-                detail="Testing",
-                acceptance_criteria="It should work"
+                detail="Testing"
             )
             
             # Test action logging
@@ -136,8 +136,9 @@ def test_sandbox():
             project_root = Path(tmpdir) / "project"
             os.makedirs(project_root, exist_ok=True)
 
-            # Initialize memory with the project root directory
-            memory = RuntimeMemory(project_root)
+            # Initialize memory with a specific database file path
+            db_path = project_root / "runtime_state.db"
+            memory = RuntimeMemory(db_path)
 
             # Copy Dockerfile and requirements.txt to temp project root so the build works
             import shutil
@@ -151,8 +152,7 @@ def test_sandbox():
                 print("   ⚠️  Dockerfile or requirements.txt not found, skipping sandbox execution test.")
                 return True # Can't test this part, so we'll assume it's ok for now.
 
-            # Need to provide a session_id for the test
-            runtime = SandboxRuntime(project_root, memory, "test_session")
+            runtime = SandboxRuntime(project_root, memory)
             
             # Test file creation
             result = runtime.create_file("test.txt", "Hello, World!")
