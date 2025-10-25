@@ -5,11 +5,7 @@ AI Runtime Launcher - Start an interactive AI development session with persisten
 import os
 import sys
 import requests
-import subprocess
-from pathlib import Path
 from ai_runtime.lm_bridge import LMStudioRuntimeSession
-from ai_runtime.project_templates import apply_template, PROJECT_TEMPLATES
-from ai_runtime.code_validator import CodeValidator
 
 LM_STUDIO_URL = "http://localhost:1234"
 
@@ -61,62 +57,6 @@ def print_tree(tree: dict, indent: int = 0):
             print("  " * indent + f"📄 {key}")
 
 
-def pick_template() -> str:
-    """Let user select a project template"""
-    print("\n🚀 Project Templates:")
-    templates = list(PROJECT_TEMPLATES.keys())
-    for idx, name in enumerate(templates):
-        description = PROJECT_TEMPLATES[name]['description']
-        print(f"  [{idx}] {name} - {description}")
-
-    print(f"  [{len(templates)}] None - Start with an empty project")
-
-    while True:
-        try:
-            choice = input("\nSelect a template to start with: ").strip()
-            if choice.isdigit():
-                idx = int(choice)
-                if 0 <= idx < len(templates):
-                    return templates[idx]
-                elif idx == len(templates):
-                    return None
-            print("Invalid selection. Try again.")
-        except KeyboardInterrupt:
-            print("\n👋 Cancelled")
-            sys.exit(0)
-
-
-def pick_session(project_root: Path) -> str:
-    """Let user select a previous session to resume"""
-    session_dir = project_root / ".ai_sessions"
-    if not session_dir.exists():
-        return None
-
-    sessions = sorted([f.stem for f in session_dir.glob("*.json")], reverse=True)
-    if not sessions:
-        return None
-
-    print("\n🔄 Available Sessions to Resume:")
-    for idx, name in enumerate(sessions):
-        print(f"  [{idx}] {name}")
-
-    print(f"  [{len(sessions)}] None - Start a new session")
-
-    while True:
-        try:
-            choice = input("\nSelect a session to resume: ").strip()
-            if choice.isdigit():
-                idx = int(choice)
-                if 0 <= idx < len(sessions):
-                    return sessions[idx]
-                elif idx == len(sessions):
-                    return None
-            print("Invalid selection. Try again.")
-        except KeyboardInterrupt:
-            print("\n👋 Cancelled")
-            sys.exit(0)
-
-
 def main():
     print("=" * 60)
     print("   🤖 AI RUNTIME LAUNCHER")
@@ -139,55 +79,20 @@ def main():
     model_name = pick_model(models)
 
     # Setup project directory
-    project_root_path = Path(os.path.abspath("./ai_runtime_project"))
-    project_root = str(project_root_path)
+    project_root = os.path.abspath("./ai_runtime_project")
     os.makedirs(project_root, exist_ok=True)
     print(f"\n📂 Project workspace: {project_root}")
     print(f"💾 Database: {project_root}/runtime_state.db")
-
-    # Initialize Git repository
-    if not (project_root_path / ".git").exists():
-        print("Initializing Git repository...")
-        subprocess.run(["git", "init"], cwd=project_root, capture_output=True)
-
-    # Pick session to resume or start new
-    session_id = pick_session(project_root_path)
 
     # Initialize runtime session
     print("\n⚙️  Initializing runtime...")
     session = LMStudioRuntimeSession(
         model_name=model_name,
         lm_base_url=LM_STUDIO_URL,
-        project_root=project_root,
-        session_id=session_id
+        project_root=project_root
     )
 
-    # Apply project template if it's a new session
-    if not session_id:
-        template_name = pick_template()
-        if template_name:
-            print(f"\nApplying template '{template_name}'...")
-            result = apply_template(template_name, project_root_path)
-
-            if result.get("post_commands"):
-                print("\nRunning post-template commands...")
-                for command in result["post_commands"]:
-                    print(f"$ {command}")
-                    exec_result = session.runtime.run_shell(command)
-                    if not exec_result["success"]:
-                        print(f"  ⚠️  Command failed: {exec_result.get('stderr') or exec_result.get('error')}")
-
-            if result.get("notes"):
-                general_module = session.memory.get_or_create_module(
-                    name="general",
-                    path="./",
-                    description="General project notes and context"
-                )
-                for note in result["notes"]:
-                    session.memory.add_note(general_module["id"], f"[Template: {template_name}] {note}")
-                print("📝 Template notes added to memory.")
-
-    print(f"\n🎯 Runtime session '{session.session_id}' is LIVE!")
+    print("\n🎯 Runtime session is LIVE!")
     print("\n" + "=" * 60)
     print("💡 TIPS:")
     print("   • The AI will create modules and track progress in the database")
@@ -203,11 +108,6 @@ def main():
     print("   • 'freeze <module_name>' - Freeze a module to prevent edits")
     print("   • 'unfreeze <module_name>' - Unfreeze a module")
     print("   • 'modules' - List all modules and their status")
-    print("   • 'template' - Show available project templates")
-    print("   • 'sessions' - List and resume previous sessions")
-    print("   • 'mission' - Start a new mission intake")
-    print("   • 'explain' - Explain the AI's current task and goal")
-    print("   • 'validate' - Run validation suite on the project")
     print("   • 'exit'    - Quit the runtime")
     print("=" * 60)
 
@@ -233,7 +133,7 @@ def main():
                 print("\n🗂️  MODULES:")
                 for mod in status["modules"]:
                     status_icon = {
-                        'frozen': '❄️',
+                        'frozen': '🔒',
                         'active': '✅',
                         'staging': '🚧'
                     }.get(mod['status'], '❓')
@@ -285,84 +185,9 @@ def main():
                     print(f"     Status: {mod['status']} | Priority: {mod['priority']}")
                 continue
 
-            elif user_input.lower() == "template":
-                pick_template() # Just show the templates
-                continue
-
-            elif user_input.lower() == "sessions":
-                pick_session(project_root_path) # Just show the sessions
-                continue
-
-            elif user_input.lower() == 'mission':
-                title = input("Step Title: ").strip()
-                detail = input("Step Detail: ").strip()
-                acceptance_criteria = input("Acceptance Criteria: ").strip()
-                user_input = f"New mission: {title}\nDetails: {detail}\nAcceptance Criteria: {acceptance_criteria}"
-                result = session.step(user_input)
-
-            elif user_input.lower() == 'explain':
-                status = session.get_status()
-                if not status["active_steps"]:
-                    print("\n🧠 No active mission. Use the 'mission' command to start one.")
-                    continue
-
-                current_step = status["active_steps"][0]
-                print(f"\n🧠 EXPLAINING CURRENT TASK")
-                print("=" * 60)
-                print(f"TASK: {current_step['title']}")
-                print(f"GOAL: {session.memory.get_step_details(current_step['id']).get('acceptance_criteria')}")
-
-                if status["recent_actions"]:
-                    last_action = status["recent_actions"][0]
-                    success_icon = '✅' if last_action['success'] else '❌'
-                    print(f"LAST ACTION: {success_icon} {last_action['action_type']}")
-                else:
-                    print("LAST ACTION: No actions taken yet for this step.")
-
-            elif user_input.lower() == "validate":
-                print("\n🔬 Running validation suite...")
-                validator = CodeValidator(project_root)
-
-                # Find all Python files, excluding dotfiles/dirs
-                py_files = []
-                for root, _, files in os.walk(project_root):
-                    # Skip dot directories
-                    if any(part.startswith('.') for part in Path(root).relative_to(project_root_path).parts):
-                        continue
-                    for file in files:
-                        if file.endswith(".py"):
-                            py_files.append(os.path.relpath(os.path.join(root, file), project_root))
-
-                errors = []
-                print(f"Found {len(py_files)} Python files to check.")
-
-                for file_path in py_files:
-                    print(f"  - Linting {file_path}...")
-                    lint_result = validator.run_lint(file_path)
-                    if not lint_result["success"]:
-                        errors.append(f"Linting Error in {file_path}:\n{lint_result['errors']}\n")
-
-                test_dir = project_root_path / "tests"
-                if test_dir.exists() and test_dir.is_dir():
-                    print("  - Running tests...")
-                    test_result = validator.run_tests("tests/")
-                    if not test_result["success"]:
-                        errors.append(f"Test Failures:\n{test_result.get('stderr') or test_result.get('stdout')}\n")
-                else:
-                    print("  - No 'tests' directory found, skipping tests.")
-
-                if errors:
-                    print("\n❌ Validation Failed:")
-                    for error in errors:
-                        print(error)
-                else:
-                    print("\n✅ All validation checks passed!")
-                continue
-
-            else:
-                # Process AI directive
-                print("🔄 Processing...")
-                result = session.step(user_input)
+            # Process AI directive
+            print("🔄 Processing...")
+            result = session.step(user_input)
 
             if not result.get("success"):
                 print(f"\n❌ Step failed: {result.get('error')}")

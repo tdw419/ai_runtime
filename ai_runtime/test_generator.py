@@ -1,6 +1,7 @@
 import ast
+import inspect
+from typing import Dict, Any, List, Optional
 from pathlib import Path
-from typing import Dict, Any, List
 
 class TestGenerator:
     """Automatically generate tests for AI-created code"""
@@ -22,9 +23,13 @@ class TestGenerator:
                     functions.append({
                         "name": node.name,
                         "args": [arg.arg for arg in node.args.args],
+                        "lineno": node.lineno
                     })
                 elif isinstance(node, ast.ClassDef):
-                    classes.append({"name": node.name})
+                    classes.append({
+                        "name": node.name,
+                        "lineno": node.lineno
+                    })
 
             return {
                 "success": True,
@@ -43,7 +48,7 @@ class TestGenerator:
 
         imports = [
             "import pytest",
-            f"from {filename} import *"
+            f"from {Path(filepath).stem} import *"
         ]
 
         test_cases = []
@@ -71,21 +76,26 @@ class Test{cls['name']}:
 
     def test_{cls['name'].lower()}_creation(self):
         \"\"\"Test {cls['name']} instantiation\"\"\"
-        # instance = {cls['name']}()
+        # TODO: Implement test
+        # instance = {cls['name']}(...)
         # assert instance is not None
         pass
 """
-            test_cases.append(test_case)
+                test_cases.append(test_case)
 
         test_content = "\n".join(imports) + "\n".join(test_cases)
         return test_content
 
     def should_generate_tests(self, filepath: str, action: str) -> bool:
-        """Determine if tests should be generated"""
+        """Determine if tests should be generated for this action"""
         if action not in ["create_file", "modify_file"]:
             return False
+
         if not filepath.endswith(".py"):
             return False
+
+        # Don't generate tests for test files
         if "test_" in filepath or filepath.startswith("tests/"):
             return False
+
         return True
