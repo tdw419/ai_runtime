@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import datetime
 from .memory import RuntimeMemory
 from .sandbox import SandboxRuntime
+from .code_validator import CodeValidator
 
 
 RUNTIME_SYSTEM_PROMPT = """You are an AI development agent operating in a RUNTIME ENVIRONMENT.
@@ -27,9 +28,9 @@ IMPORTANT RULES:
 1. Before modifying a file, ALWAYS read_file first to see current contents
 2. Check module status - DO NOT edit frozen modules
 3. Keep changes surgical and focused
-4. After creating/modifying code, test it with run_python or run_shell
-5. Work in small, testable steps
-6. You will receive execution results after each step
+4. After creating/modifying code, test it with run_python or run_shell. Expect validation feedback.
+5. Work in small, testable steps. Your code will be validated for correctness.
+6. You will receive execution results and validation feedback after each step. If there are errors, you are expected to fix them.
 
 Response format (JSON ONLY):
 {
@@ -79,6 +80,9 @@ class LMStudioRuntimeSession:
         # Initialize sandbox runtime
         self.runtime = SandboxRuntime(str(self.project_root), self.memory)
         
+        # Initialize code validator
+        self.validator = CodeValidator(self.project_root)
+
         # Current step being worked on
         self.current_step_id = None
 
@@ -267,6 +271,21 @@ Respond with JSON only:
                 "result": result
             })
         
+        # Validation step
+        validation_errors = []
+        for directive in ai_plan.get("directives", []):
+            if directive.get("action") in ["create_file", "modify_file"]:
+                filepath = directive.get("parameters", {}).get("filepath")
+                if filepath and filepath.endswith(".py"):
+                    validation_result = self.validator.check_syntax(filepath)
+                    if not validation_result["success"]:
+                        validation_errors.append(validation_result["error"])
+
+        if validation_errors:
+            # If validation fails, send the errors back to the AI to fix
+            error_message = "The following errors were found in the code you just wrote. Please fix them:\n" + "\n".join(validation_errors)
+            return self.step(error_message)
+
         # Check if step is complete
         all_successful = all(r["result"].get("success", False) for r in exec_results)
         if all_successful and "next_steps" in ai_plan:

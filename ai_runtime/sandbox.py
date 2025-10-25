@@ -143,6 +143,24 @@ class SandboxRuntime:
             self._record_action("modify_file", result, step_id)
             return result
         
+        # Diff size cap
+        old_content_for_diff = ""
+        if full_path.exists():
+            try:
+                old_content_for_diff = full_path.read_text()
+            except Exception:
+                pass # Ignore if read fails, proceed with write
+
+        line_diff = abs(len(old_content_for_diff.splitlines()) - len(new_content.splitlines()))
+        if line_diff > self.max_line_changes:
+             result = {
+                "success": False,
+                "error": f"Change too large: {line_diff} lines changed (limit {self.max_line_changes})",
+                "policy": "diff_cap"
+            }
+             self._record_action("modify_file", result, step_id)
+             return result
+
         try:
             # Backup old content
             old_content = full_path.read_text()
