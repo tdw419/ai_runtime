@@ -140,18 +140,6 @@ def test_sandbox():
             db_path = project_root / "runtime_state.db"
             memory = RuntimeMemory(db_path)
 
-            # Copy Dockerfile and requirements.txt to temp project root so the build works
-            import shutil
-            dockerfile_path = os.path.join(os.getcwd(), "Dockerfile")
-            requirements_path = os.path.join(os.getcwd(), "requirements.txt")
-
-            if os.path.exists(dockerfile_path) and os.path.exists(requirements_path):
-                shutil.copy(dockerfile_path, project_root)
-                shutil.copy(requirements_path, project_root)
-            else:
-                print("   ⚠️  Dockerfile or requirements.txt not found, skipping sandbox execution test.")
-                return True # Can't test this part, so we'll assume it's ok for now.
-
             runtime = SandboxRuntime(project_root, memory)
             
             # Test file creation

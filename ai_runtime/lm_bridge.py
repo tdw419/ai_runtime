@@ -70,6 +70,23 @@ class LMStudioRuntimeSession:
         # Current step being worked on
         self.current_step_id = None
 
+        # Token Management
+        self.MODEL_CONTEXT_WINDOW = 4096
+        self.RESPONSE_SAFETY_MARGIN = 1024
+
+    def _count_tokens(self, text: str) -> int:
+        """A simple approximation for token counting."""
+        return len(text) // 4
+
+    def _trim_context(self, context: str, max_tokens: int) -> str:
+        """Trims the context string to fit within the token budget."""
+        if self._count_tokens(context) <= max_tokens:
+            return context
+
+        # Simple truncation for now, can be made smarter later
+        trimmed_len = int(max_tokens * 3.5) # Estimate character length
+        return context[:trimmed_len] + "\n... (context truncated)"
+
     def _call_lm_studio(self, prompt: str) -> str:
         """Call LM Studio API"""
         try:
@@ -96,8 +113,8 @@ class LMStudioRuntimeSession:
         except Exception as e:
             return f"Error calling LM Studio: {str(e)}"
 
-    def _parse_ai_response(self, response: str) -> Optional[Dict[str, Any]]:
-        """Parse AI response as JSON"""
+    def _parse_ai_response(self, response: str, original_prompt: str = "") -> Optional[Dict[str, Any]]:
+        """Parse AI response as JSON, with a retry mechanism for fixing malformed JSON."""
         try:
             # Try to extract JSON if wrapped in markdown
             if "```json" in response:
@@ -111,7 +128,19 @@ class LMStudioRuntimeSession:
 
             return json.loads(response)
         except json.JSONDecodeError:
-            return None
+            print("⚠️ Malformed JSON detected. Attempting to repair...")
+            repair_prompt = f"""The following response is not valid JSON. Please fix the syntax and return ONLY the corrected, valid JSON.
+
+Malformed Response:
+{response}
+"""
+            repaired_response = self._call_lm_studio(repair_prompt)
+            try:
+                # Try parsing the repaired response
+                return json.loads(repaired_response)
+            except json.JSONDecodeError:
+                print("❌ JSON repair failed.")
+                return None
 
     def intake_mission(self, user_request: str) -> Dict[str, Any]:
         """Process initial mission intake and create module/step"""
@@ -132,7 +161,7 @@ Respond with JSON only:
 """
 
         response = self._call_lm_studio(intake_prompt)
-        parsed = self._parse_ai_response(response)
+        parsed = self._parse_ai_response(response, original_prompt=intake_prompt)
 
         if not parsed:
             # Fallback: create generic module
@@ -175,9 +204,19 @@ Respond with JSON only:
         # Get current project context
         context = self.memory.get_context_summary()
 
-        # Build prompt with context
+        # Build the prompt skeleton to calculate available context size
+        prompt_skeleton = RUNTIME_SYSTEM_PROMPT.format(context="{context}", user_request=user_request)
+        prompt_skeleton_tokens = self._count_tokens(prompt_skeleton)
+
+        # Calculate the token budget for the context
+        context_token_budget = self.MODEL_CONTEXT_WINDOW - prompt_skeleton_tokens - self.RESPONSE_SAFETY_MARGIN
+
+        # Trim the context to fit the budget
+        trimmed_context = self._trim_context(context, context_token_budget)
+
+        # Build the final prompt
         prompt = RUNTIME_SYSTEM_PROMPT.format(
-            context=context,
+            context=trimmed_context,
             user_request=user_request
         )
 
@@ -185,7 +224,7 @@ Respond with JSON only:
         response = self._call_lm_studio(prompt)
 
         # Parse response
-        ai_plan = self._parse_ai_response(response)
+        ai_plan = self._parse_ai_response(response, original_prompt=prompt)
 
         if not ai_plan:
             return {

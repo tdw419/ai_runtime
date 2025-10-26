@@ -215,11 +215,6 @@ session.freeze_module("auth")  # AI can't edit auth module
 - Max file size: 50KB
 - Max line changes: 500 lines per edit
 
-### 4. Docker Sandbox
-- All code is executed within a secure, isolated Docker container.
-- The project directory is mounted as a volume, allowing the AI to modify files directly without rebuilding the image.
-- This provides a consistent and safe execution environment.
-
 ## 💡 Example Session
 
 ```bash
@@ -357,8 +352,7 @@ memory.close()
 - No rollback mechanism (yet)
 
 ### Planned Features
-- [x] Docker container support
-- [x] Git integration for versioning
+- [ ] Git integration for versioning
 - [ ] Web UI dashboard
 - [ ] Multi-model support (switch models mid-session)
 - [ ] Rollback/undo functionality

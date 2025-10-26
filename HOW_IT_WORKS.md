@@ -310,16 +310,6 @@ if len(content) > MAX_FILE_SIZE:
 - Memory exhaustion attacks
 - Runaway generation
 
-### 4. Docker Sandbox
-
-The runtime uses a stateful Docker container for secure, isolated execution.
-
-**Key Features:**
-- **Stateful Container:** A container is started at the beginning of a session and persists until the session is closed.
-- **Volume Mounting:** The project directory is mounted into the container at `/app`. This allows the AI to modify files directly, and the changes are immediately reflected on the host. This is highly performant as it avoids image rebuilding.
-- **Isolation:** All shell and Python commands are run inside this container, preventing any impact on the host system.
-- **Consistent Environment:** The Dockerfile defines a consistent environment with all necessary dependencies, ensuring that code runs the same way every time.
-
 ## 🔄 Iteration Loop
 
 The system supports iterative development:
