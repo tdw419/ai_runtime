@@ -215,6 +215,12 @@ session.freeze_module("auth")  # AI can't edit auth module
 - Max file size: 50KB
 - Max line changes: 500 lines per edit
 
+### 4. System Stewardship
+The runtime includes an active monitoring component to ensure system integrity.
+- **Baseline Collection:** On startup, it records the hashes of critical files and a snapshot of running processes.
+- **Anomaly Detection:** It periodically checks for unauthorized file modifications or unexpected new processes.
+- **Security Reporting:** Generates a `SECURITY_REPORT.md` if anomalies are detected.
+
 ## 💡 Example Session
 
 ```bash

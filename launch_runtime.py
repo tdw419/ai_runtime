@@ -5,7 +5,9 @@ AI Runtime Launcher - Start an interactive AI development session with persisten
 import os
 import sys
 import requests
-from ai_runtime.lm_bridge import LMStudioRuntimeSession
+import threading
+from lm_bridge import LMStudioRuntimeSession
+from system_stewardship_monitor import SystemStewardshipMonitor
 
 LM_STUDIO_URL = "http://localhost:1234"
 
@@ -55,6 +57,23 @@ def print_tree(tree: dict, indent: int = 0):
             print("  " * indent + f"📁 {key}")
         else:
             print("  " * indent + f"📄 {key}")
+
+
+def run_stewardship_monitor(monitor: SystemStewardshipMonitor):
+    """
+    The function that runs in a separate thread to perform system monitoring.
+    """
+    monitor.collect_system_baseline()
+
+    check_interval_seconds = 120  # Check every 2 minutes
+    while True:
+        time.sleep(check_interval_seconds)
+        anomalies = monitor.detect_anomalies()
+        if anomalies:
+            print(f"\n🚨 [STEWARDSHIP ALERT] {len(anomalies)} anomalies detected. Run 'status' for details.")
+            # Auto-generate a report on detection
+            report = monitor.generate_security_report()
+            Path("SECURITY_REPORT.md").write_text(report)
 
 
 def main():
@@ -111,6 +130,15 @@ def main():
     print("   • 'exit'    - Quit the runtime")
     print("=" * 60)
 
+    # Start the stewardship monitor in a background thread
+    stewardship_monitor = SystemStewardshipMonitor()
+    stewardship_thread = threading.Thread(
+        target=run_stewardship_monitor, args=(stewardship_monitor,), daemon=True
+    )
+    stewardship_thread.start()
+    print("🛡️  System Stewardship Monitor is running in the background.")
+    print("=" * 60)
+
     # Interactive loop
     while True:
         try:
@@ -149,6 +177,11 @@ def main():
                 else:
                     print("  (no active steps)")
                 
+                print("\n🛡️  SYSTEM STEWARDSHIP:")
+                print(f"   • Security Events Logged: {len(stewardship_monitor.security_events)}")
+                if stewardship_monitor.security_events:
+                    print("     (See SECURITY_REPORT.md for details)")
+
                 print("\n🔄 RECENT ACTIONS:")
                 for action in status["recent_actions"][:5]:
                     success_icon = '✅' if action['success'] else '❌'

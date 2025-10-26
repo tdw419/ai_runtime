@@ -4,46 +4,45 @@ LM Studio Bridge - Connects local AI models to the runtime environment
 import json
 import requests
 from typing import Dict, Any, Optional
-from .memory import RuntimeMemory
-from .sandbox import SandboxRuntime
+from memory import RuntimeMemory
+from sandbox import SandboxRuntime
 
 
-RUNTIME_SYSTEM_PROMPT = """You are a protocol-driven AI agent. Your task is to propose the next single, atomic, safe action to advance the current goal.
+RUNTIME_SYSTEM_PROMPT = """You are an AI development agent operating in a RUNTIME ENVIRONMENT.
 
-**Protocol Rules:**
-1.  **Strict I/O:** Respond ONLY with a single, valid JSON object containing `reasoning`, `directives`, and `next_steps`. No other text.
-2.  **Atomicity:** Propose only 1-3 atomic directives per turn. An atomic action is a single file operation (`create_file`, `modify_file`, `read_file`) or a single command (`run_shell`, `run_python`).
-3.  **Governance:** You will be given the status of project modules. You MUST NOT propose changes to `frozen` modules. Your actions should only target `active` or `staging` modules.
-4.  **Safety:** Before proposing `modify_file`, you must have previously used `read_file` on that same file in a recent turn.
+You do NOT respond with chat or explanations. You respond ONLY with JSON directives.
 
-**Trial-and-Error Workflow:**
-1.  For new features or uncertain approaches, use the `experiment` action to test your hypothesis in a safe sandbox.
-2.  The `experiment` action takes a `goal` and a `plan` of sub-directives. All file operations in the plan are automatically scoped to a temporary `sandbox/<trial_id>/` directory.
-3.  Observe the `experiment_summary` to see if your trial was successful.
-4.  If successful, use the `promote_artifact` action to move your working file from the sandbox to the main codebase. This requires a `justification`.
+Available actions:
+- "create_file": {"filepath": "path/to/file.py", "content": "file contents"}
+- "read_file": {"filepath": "path/to/file.py"}
+- "modify_file": {"filepath": "path/to/file.py", "new_content": "updated contents"}
+- "delete_file": {"filepath": "path/to/file.py"}
+- "run_python": {"command": "print('hello')"}
+- "run_shell": {"command": "pip install flask"}
+- "project_tree": {}
 
-**Response Format (JSON ONLY):**
+IMPORTANT RULES:
+1. Before modifying a file, ALWAYS read_file first to see current contents
+2. Check module status - DO NOT edit frozen modules
+3. Keep changes surgical and focused
+4. After creating/modifying code, test it with run_python or run_shell
+5. Work in small, testable steps
+6. You will receive execution results after each step
+
+Response format (JSON ONLY):
 {
-  "reasoning": "I will now conduct an experiment to test the best way to implement the login logic.",
+  "reasoning": "Brief explanation of what you're doing",
   "directives": [
     {
-      "action": "experiment",
-      "parameters": {
-        "goal": "Test JWT token generation",
-        "plan": [
-          {
-            "action": "create_file",
-            "parameters": {"filepath": "jwt_test.py", "content": "import jwt; print(jwt.encode({'some': 'payload'}, 'secret'))"}
-          },
-          {
-            "action": "run_python",
-            "parameters": {"command": "python jwt_test.py"}
-          }
-        ]
-      }
+      "action": "create_file",
+      "parameters": {"filepath": "app.py", "content": "..."}
+    },
+    {
+      "action": "run_shell",
+      "parameters": {"command": "pip install flask"}
     }
   ],
-  "next_steps": "If the experiment is successful, I will promote the artifact."
+  "next_steps": "What should happen next"
 }
 
 PROJECT STATE CONTEXT:
@@ -71,23 +70,6 @@ class LMStudioRuntimeSession:
         # Current step being worked on
         self.current_step_id = None
 
-        # Token Management
-        self.MODEL_CONTEXT_WINDOW = 4096
-        self.RESPONSE_SAFETY_MARGIN = 1024
-
-    def _count_tokens(self, text: str) -> int:
-        """A simple approximation for token counting."""
-        return len(text) // 4
-
-    def _trim_context(self, context: str, max_tokens: int) -> str:
-        """Trims the context string to fit within the token budget."""
-        if self._count_tokens(context) <= max_tokens:
-            return context
-
-        # Simple truncation for now, can be made smarter later
-        trimmed_len = int(max_tokens * 3.5) # Estimate character length
-        return context[:trimmed_len] + "\n... (context truncated)"
-
     def _call_lm_studio(self, prompt: str) -> str:
         """Call LM Studio API"""
         try:
@@ -114,41 +96,21 @@ class LMStudioRuntimeSession:
         except Exception as e:
             return f"Error calling LM Studio: {str(e)}"
 
-    def _parse_ai_response(self, response: str, original_prompt: str = "") -> Optional[Dict[str, Any]]:
-        """Parse AI response as JSON, with salvage and repair mechanisms."""
-
-        # First, try to salvage a JSON object from the response string
+    def _parse_ai_response(self, response: str) -> Optional[Dict[str, Any]]:
+        """Parse AI response as JSON"""
         try:
-            start = response.find('{')
-            end = response.rfind('}') + 1
-            if start != -1 and end != 0:
-                json_str = response[start:end]
-                return json.loads(json_str)
-        except json.JSONDecodeError:
-            pass  # Salvage failed, proceed to repair
+            # Try to extract JSON if wrapped in markdown
+            if "```json" in response:
+                start = response.find("```json") + 7
+                end = response.find("```", start)
+                response = response[start:end].strip()
+            elif "```" in response:
+                start = response.find("```") + 3
+                end = response.find("```", start)
+                response = response[start:end].strip()
 
-        # If salvage fails, try to repair the original response
-        print("⚠️ Malformed JSON detected. Attempting to repair...")
-        repair_prompt = f"""The following response is not valid JSON. Please fix the syntax and return ONLY the corrected, valid JSON. Do not add any commentary.
-
-Malformed Response:
-```
-{response}
-```
-"""
-        repaired_response = self._call_lm_studio(repair_prompt)
-        try:
-            # Try parsing the repaired response, salvaging again just in case
-            start = repaired_response.find('{')
-            end = repaired_response.rfind('}') + 1
-            if start != -1 and end != 0:
-                json_str = repaired_response[start:end]
-                return json.loads(json_str)
-            else:
-                print("❌ JSON repair failed: No JSON object found in repaired response.")
-                return None
+            return json.loads(response)
         except json.JSONDecodeError:
-            print("❌ JSON repair failed: Repaired response is still not valid JSON.")
             return None
 
     def intake_mission(self, user_request: str) -> Dict[str, Any]:
@@ -170,7 +132,7 @@ Respond with JSON only:
 """
 
         response = self._call_lm_studio(intake_prompt)
-        parsed = self._parse_ai_response(response, original_prompt=intake_prompt)
+        parsed = self._parse_ai_response(response)
 
         if not parsed:
             # Fallback: create generic module
@@ -213,19 +175,9 @@ Respond with JSON only:
         # Get current project context
         context = self.memory.get_context_summary()
 
-        # Build the prompt skeleton to calculate available context size
-        prompt_skeleton = RUNTIME_SYSTEM_PROMPT.format(context="{context}", user_request=user_request)
-        prompt_skeleton_tokens = self._count_tokens(prompt_skeleton)
-
-        # Calculate the token budget for the context
-        context_token_budget = self.MODEL_CONTEXT_WINDOW - prompt_skeleton_tokens - self.RESPONSE_SAFETY_MARGIN
-
-        # Trim the context to fit the budget
-        trimmed_context = self._trim_context(context, context_token_budget)
-
-        # Build the final prompt
+        # Build prompt with context
         prompt = RUNTIME_SYSTEM_PROMPT.format(
-            context=trimmed_context,
+            context=context,
             user_request=user_request
         )
 
@@ -233,7 +185,7 @@ Respond with JSON only:
         response = self._call_lm_studio(prompt)
 
         # Parse response
-        ai_plan = self._parse_ai_response(response, original_prompt=prompt)
+        ai_plan = self._parse_ai_response(response)
 
         if not ai_plan:
             return {

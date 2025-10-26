@@ -1,0 +1,14 @@
+# AI Runtime Configuration
+runtime:
+  max_history_size: 200
+  learning_enabled: true
+  loop_detection: true
+
+optimization:
+  retry_limit: 3
+  fallback_enabled: true
+  success_rate_threshold: 0.7
+
+logging:
+  level: INFO
+  file: logs/runtime.log

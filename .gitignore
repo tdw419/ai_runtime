@@ -100,3 +100,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# AI Runtime specific
+.ai_runtime/
+SECURITY_REPORT.md
+STATUS.md
+*.log
