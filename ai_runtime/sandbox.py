@@ -269,6 +269,88 @@ class SandboxRuntime:
         self._record_action("run_shell", response, step_id)
         return response
 
+    def experiment(self, goal: str, plan: list, step_id: Optional[int] = None) -> Dict[str, Any]:
+        """Run a series of actions in an isolated sandbox to test a hypothesis."""
+        import uuid
+        trial_id = f"exp-{uuid.uuid4().hex[:8]}"
+        sandbox_dir = self.project_root / "sandbox" / trial_id
+        sandbox_dir.mkdir(parents=True, exist_ok=True)
+
+        results = []
+        overall_success = True
+
+        for i, directive in enumerate(plan):
+            # IMPORTANT: We must modify the filepaths in the plan to be relative to the sandbox dir
+            action = directive.get("action")
+            params = directive.get("parameters", {})
+            if "filepath" in params:
+                params["filepath"] = str(Path("sandbox") / trial_id / params["filepath"])
+
+            # Execute the action
+            result = self.execute_directive(directive, step_id)
+            results.append({"step": i + 1, "directive": directive, "result": result})
+
+            if not result.get("success"):
+                overall_success = False
+                break  # Stop on first failure
+
+        summary = {
+            "trial_id": trial_id,
+            "goal": goal,
+            "success": overall_success,
+            "steps_executed": len(results),
+            "results": results
+        }
+
+        # Log the experiment result to memory
+        self.memory.log_experiment(summary)
+
+        return {"success": True, "experiment_summary": summary}
+
+    def promote_artifact(self, source_path: str, target_path: str, justification: str, step_id: Optional[int] = None) -> Dict[str, Any]:
+        """Promote a file from the sandbox to a production module after a successful experiment."""
+
+        # 1. Verify source is in the sandbox
+        if not source_path.startswith("sandbox/"):
+            result = {"success": False, "error": "Source path must be within the sandbox."}
+            self._record_action("promote_artifact", result, step_id)
+            return result
+
+        # 2. Verify target is not in the sandbox
+        if target_path.startswith("sandbox/"):
+            result = {"success": False, "error": "Target path cannot be within the sandbox."}
+            self._record_action("promote_artifact", result, step_id)
+            return result
+
+        # 3. Perform safety check on the target path (e.g., check for frozen modules)
+        safety_check = self._check_path_safety(target_path)
+        if not safety_check["success"]:
+            result = {"success": False, **safety_check}
+            self._record_action("promote_artifact", result, step_id)
+            return result
+
+        source_full_path = self.project_root / source_path
+        target_full_path = self.project_root / target_path
+
+        if not source_full_path.exists():
+            result = {"success": False, "error": f"Source file does not exist: {source_path}"}
+            self._record_action("promote_artifact", result, step_id)
+            return result
+
+        try:
+            target_full_path.parent.mkdir(parents=True, exist_ok=True)
+            source_full_path.rename(target_full_path)
+            result = {
+                "success": True,
+                "message": f"Successfully promoted {source_path} to {target_path}.",
+                "justification": justification
+            }
+        except Exception as e:
+            result = {"success": False, "error": str(e)}
+
+        self._record_action("promote_artifact", result, step_id)
+        return result
+
     def project_tree(self) -> Dict[str, Any]:
         """Get project directory structure"""
         tree = {}
@@ -302,6 +384,10 @@ class SandboxRuntime:
             return self.run_shell(params.get("command"), step_id)
         elif action == "project_tree":
             return self.project_tree()
+        elif action == "experiment":
+            return self.experiment(params.get("goal"), params.get("plan"), step_id)
+        elif action == "promote_artifact":
+            return self.promote_artifact(params.get("source_path"), params.get("target_path"), params.get("justification"), step_id)
         else:
             return {
                 "success": False,

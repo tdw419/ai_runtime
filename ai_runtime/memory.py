@@ -16,6 +16,17 @@ class RuntimeMemory:
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
+        self._ensure_sandbox_module()
+
+    def _ensure_sandbox_module(self):
+        """Ensure that the sandbox module exists."""
+        self.get_or_create_module(
+            name="sandbox",
+            path="sandbox/",
+            description="Ephemeral module for trial-and-error experiments. Always writable.",
+            default_status="ephemeral",
+            default_priority=0
+        )
 
     def _init_schema(self):
         """Initialize database schema"""
@@ -70,6 +81,20 @@ class RuntimeMemory:
             note TEXT,
             created_at TEXT,
             FOREIGN KEY (module_id) REFERENCES modules(id)
+        )
+        """)
+
+        # Experiments table - logs trial and error experiments
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS experiments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trial_id TEXT UNIQUE,
+            goal TEXT,
+            plan_json TEXT,
+            outcome_json TEXT,
+            success INTEGER,
+            score INTEGER,
+            created_at TEXT
         )
         """)
 
@@ -136,6 +161,10 @@ class RuntimeMemory:
 
     def is_path_frozen(self, filepath: str) -> bool:
         """Check if a file path belongs to a frozen module"""
+        # The sandbox is never frozen.
+        if filepath.startswith("sandbox/"):
+            return False
+
         cur = self.conn.cursor()
         cur.execute("""
             SELECT status FROM modules
@@ -216,6 +245,35 @@ class RuntimeMemory:
         """, (limit,))
         return [dict(row) for row in cur.fetchall()]
 
+    # ===== EXPERIMENT TRACKING =====
+
+    def log_experiment(self, experiment_summary: Dict[str, Any]):
+        """Log the result of a trial-and-error experiment."""
+        cur = self.conn.cursor()
+        cur.execute("""
+            INSERT INTO experiments (trial_id, goal, plan_json, outcome_json, success, score, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            experiment_summary.get("trial_id"),
+            experiment_summary.get("goal"),
+            json.dumps(experiment_summary.get("plan", [])),
+            json.dumps(experiment_summary.get("results", [])),
+            1 if experiment_summary.get("success") else 0,
+            experiment_summary.get("score", 0),
+            self._now()
+        ))
+        self.conn.commit()
+
+    def get_recent_experiments(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Get recent experiments."""
+        cur = self.conn.cursor()
+        cur.execute("""
+            SELECT * FROM experiments
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in cur.fetchall()]
+
     # ===== NOTES/GUIDANCE =====
 
     def add_note(self, module_id: int, note: str):
@@ -252,7 +310,8 @@ class RuntimeMemory:
             status_icon = {
                 'frozen': '🔒',
                 'active': '✅',
-                'staging': '🚧'
+                'staging': '🚧',
+                'ephemeral': '🧪'
             }.get(mod['status'], '❓')
             summary += f"  {status_icon} {mod['name']} (priority {mod['priority']}): {mod['description']}\n"
 
