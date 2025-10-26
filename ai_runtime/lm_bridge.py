@@ -8,41 +8,24 @@ from .memory import RuntimeMemory
 from .sandbox import SandboxRuntime
 
 
-RUNTIME_SYSTEM_PROMPT = """You are an AI development agent operating in a RUNTIME ENVIRONMENT.
+RUNTIME_SYSTEM_PROMPT = """You are a protocol-driven AI agent. Your task is to propose the next single, atomic, safe action to advance the current goal.
 
-You do NOT respond with chat or explanations. You respond ONLY with JSON directives.
+**Protocol Rules:**
+1.  **Strict I/O:** Respond ONLY with a single, valid JSON object containing `reasoning`, `directives`, and `next_steps`. No other text.
+2.  **Atomicity:** Propose only 1-3 atomic directives per turn. An atomic action is a single file operation (`create_file`, `modify_file`, `read_file`) or a single command (`run_shell`, `run_python`).
+3.  **Governance:** You will be given the status of project modules. You MUST NOT propose changes to `frozen` modules. Your actions should only target `active` or `staging` modules.
+4.  **Safety:** Before proposing `modify_file`, you must have previously used `read_file` on that same file in a recent turn.
 
-Available actions:
-- "create_file": {"filepath": "path/to/file.py", "content": "file contents"}
-- "read_file": {"filepath": "path/to/file.py"}
-- "modify_file": {"filepath": "path/to/file.py", "new_content": "updated contents"}
-- "delete_file": {"filepath": "path/to/file.py"}
-- "run_python": {"command": "print('hello')"}
-- "run_shell": {"command": "pip install flask"}
-- "project_tree": {}
-
-IMPORTANT RULES:
-1. Before modifying a file, ALWAYS read_file first to see current contents
-2. Check module status - DO NOT edit frozen modules
-3. Keep changes surgical and focused
-4. After creating/modifying code, test it with run_python or run_shell
-5. Work in small, testable steps
-6. You will receive execution results after each step
-
-Response format (JSON ONLY):
+**Response Format (JSON ONLY):**
 {
-  "reasoning": "Brief explanation of what you're doing",
+  "reasoning": "My analysis of the current step and why this is the correct next atomic action.",
   "directives": [
     {
-      "action": "create_file",
-      "parameters": {"filepath": "app.py", "content": "..."}
-    },
-    {
-      "action": "run_shell",
-      "parameters": {"command": "pip install flask"}
+      "action": "read_file",
+      "parameters": {"filepath": "src/api/routes.py"}
     }
   ],
-  "next_steps": "What should happen next"
+  "next_steps": "After this, I will analyze the file content to propose a modification."
 }
 
 PROJECT STATE CONTEXT:
@@ -114,33 +97,41 @@ class LMStudioRuntimeSession:
             return f"Error calling LM Studio: {str(e)}"
 
     def _parse_ai_response(self, response: str, original_prompt: str = "") -> Optional[Dict[str, Any]]:
-        """Parse AI response as JSON, with a retry mechanism for fixing malformed JSON."""
-        try:
-            # Try to extract JSON if wrapped in markdown
-            if "```json" in response:
-                start = response.find("```json") + 7
-                end = response.find("```", start)
-                response = response[start:end].strip()
-            elif "```" in response:
-                start = response.find("```") + 3
-                end = response.find("```", start)
-                response = response[start:end].strip()
+        """Parse AI response as JSON, with salvage and repair mechanisms."""
 
-            return json.loads(response)
+        # First, try to salvage a JSON object from the response string
+        try:
+            start = response.find('{')
+            end = response.rfind('}') + 1
+            if start != -1 and end != 0:
+                json_str = response[start:end]
+                return json.loads(json_str)
         except json.JSONDecodeError:
-            print("⚠️ Malformed JSON detected. Attempting to repair...")
-            repair_prompt = f"""The following response is not valid JSON. Please fix the syntax and return ONLY the corrected, valid JSON.
+            pass  # Salvage failed, proceed to repair
+
+        # If salvage fails, try to repair the original response
+        print("⚠️ Malformed JSON detected. Attempting to repair...")
+        repair_prompt = f"""The following response is not valid JSON. Please fix the syntax and return ONLY the corrected, valid JSON. Do not add any commentary.
 
 Malformed Response:
+```
 {response}
+```
 """
-            repaired_response = self._call_lm_studio(repair_prompt)
-            try:
-                # Try parsing the repaired response
-                return json.loads(repaired_response)
-            except json.JSONDecodeError:
-                print("❌ JSON repair failed.")
+        repaired_response = self._call_lm_studio(repair_prompt)
+        try:
+            # Try parsing the repaired response, salvaging again just in case
+            start = repaired_response.find('{')
+            end = repaired_response.rfind('}') + 1
+            if start != -1 and end != 0:
+                json_str = repaired_response[start:end]
+                return json.loads(json_str)
+            else:
+                print("❌ JSON repair failed: No JSON object found in repaired response.")
                 return None
+        except json.JSONDecodeError:
+            print("❌ JSON repair failed: Repaired response is still not valid JSON.")
+            return None
 
     def intake_mission(self, user_request: str) -> Dict[str, Any]:
         """Process initial mission intake and create module/step"""
