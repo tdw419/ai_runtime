@@ -215,11 +215,16 @@ session.freeze_module("auth")  # AI can't edit auth module
 - Max file size: 50KB
 - Max line changes: 500 lines per edit
 
-### 4. System Stewardship
-The runtime includes an active monitoring component to ensure system integrity.
-- **Baseline Collection:** On startup, it records the hashes of critical files and a snapshot of running processes.
-- **Anomaly Detection:** It periodically checks for unauthorized file modifications or unexpected new processes.
-- **Security Reporting:** Generates a `SECURITY_REPORT.md` if anomalies are detected.
+### 4. Command Blacklist
+Dangerous shell commands are blocked:
+- `rm -rf`
+- `sudo`
+- `format`
+- etc.
+
+### 5. Execution Timeout
+- Python commands: 30 seconds
+- Shell commands: 60 seconds
 
 ## 💡 Example Session
 
@@ -358,6 +363,7 @@ memory.close()
 - No rollback mechanism (yet)
 
 ### Planned Features
+- [ ] Docker container support
 - [ ] Git integration for versioning
 - [ ] Web UI dashboard
 - [ ] Multi-model support (switch models mid-session)

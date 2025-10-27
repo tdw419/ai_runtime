@@ -5,7 +5,6 @@ Checks that everything is installed and configured correctly
 """
 import sys
 import os
-from pathlib import Path
 
 def test_python_version():
     """Check Python version"""
@@ -89,7 +88,7 @@ def test_database():
         
         # Create temp database
         with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "test_db.sqlite"
+            db_path = os.path.join(tmpdir, "test.db")
             memory = RuntimeMemory(db_path)
             
             # Test module creation
@@ -133,13 +132,10 @@ def test_sandbox():
         import tempfile
         
         with tempfile.TemporaryDirectory() as tmpdir:
-            project_root = Path(tmpdir) / "project"
-            os.makedirs(project_root, exist_ok=True)
-
-            # Initialize memory with a specific database file path
-            db_path = project_root / "runtime_state.db"
+            db_path = os.path.join(tmpdir, "test.db")
             memory = RuntimeMemory(db_path)
 
+            project_root = os.path.join(tmpdir, "project")
             runtime = SandboxRuntime(project_root, memory)
             
             # Test file creation
@@ -158,9 +154,6 @@ def test_sandbox():
             result = runtime.run_python("print('test')")
             if not result["success"]:
                 print(f"   ❌ Python execution failed")
-                print(f"      Error: {result.get('error')}")
-                print(f"      Stdout: {result.get('stdout')}")
-                print(f"      Stderr: {result.get('stderr')}")
                 return False
             
             memory.close()

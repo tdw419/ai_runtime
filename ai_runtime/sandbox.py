@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
-from memory import RuntimeMemory
+from .memory import RuntimeMemory
 
 
 class SandboxRuntime:

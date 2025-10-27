@@ -310,6 +310,35 @@ if len(content) > MAX_FILE_SIZE:
 - Memory exhaustion attacks
 - Runaway generation
 
+### 4. Command Blacklist
+
+```python
+DANGEROUS = ['rm -rf', 'sudo', 'format', 'del /f']
+
+if any(danger in command.lower() for danger in DANGEROUS):
+    return {"success": False, "error": "Dangerous command blocked"}
+```
+
+**Prevents:**
+- Data loss
+- Privilege escalation
+- System damage
+
+### 5. Execution Timeouts
+
+```python
+subprocess.run(
+    command,
+    timeout=30,  # 30 seconds for Python
+    # timeout=60  # 60 seconds for shell
+)
+```
+
+**Prevents:**
+- Infinite loops hanging the system
+- Network calls that never return
+- Resource exhaustion
+
 ## 🔄 Iteration Loop
 
 The system supports iterative development:
@@ -421,7 +450,7 @@ session.step("Create auth.py with tests")
 # → Creates auth.py AND auth_test.py
 ```
 
-### 4. Git Integration (Implemented)
+### 4. Git Integration
 ```python
 # Auto-commit after successful steps
 if all_actions_successful:

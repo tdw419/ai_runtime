@@ -1,0 +1,33 @@
+{
+  "system_info": {
+    "phase": "bootstrap",
+    "capability_tier": 0,
+    "last_health_check": null,
+    "baseline_updated_ts": 0
+  },
+  "task_history": {
+    "test_task": {
+      "last_run": 1761535533.427521,
+      "success": true,
+      "result": "test_completed"
+    },
+    "system_health_audit": {
+      "last_run": 1761578938.0866182,
+      "success": true,
+      "result": "completed"
+    },
+    "critical_service_check": {
+      "last_run": 1761574517.891364,
+      "success": true,
+      "result": "completed"
+    },
+    "restart_service_test": {
+      "last_run": 1761578273.93638,
+      "success": false,
+      "result": "steps_failed"
+    }
+  },
+  "learned_policies": {},
+  "critical_services": [],
+  "collaboration_sessions": []
+}

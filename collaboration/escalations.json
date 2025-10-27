@@ -1,0 +1,50 @@
+{
+  "esc_1761578100_3475": {
+    "task_id": "restart_service_test",
+    "step_description": "restart unstable service if needed",
+    "reason": "Step contains risky operations that require human approval",
+    "context": {
+      "task_definition": {
+        "name": "Restart Service Test",
+        "description": "Test task that should trigger escalation",
+        "priority": "medium",
+        "schedule": "on_demand",
+        "conditions": [],
+        "implementation": [
+          "Check service status",
+          "restart unstable service if needed",
+          "Verify service recovered"
+        ],
+        "success_criteria": []
+      }
+    },
+    "created_at": 1761578100.1602697,
+    "status": "approved",
+    "human_guidance": "Approved for testing",
+    "resolved_at": 1761578273.9373307
+  },
+  "esc_1761578273_6258": {
+    "task_id": "restart_service_test",
+    "step_description": "restart unstable service if needed",
+    "reason": "Step contains risky operations that require human approval",
+    "context": {
+      "task_definition": {
+        "name": "Restart Service Test",
+        "description": "Test task that should trigger escalation",
+        "priority": "medium",
+        "schedule": "on_demand",
+        "conditions": [],
+        "implementation": [
+          "Check service status",
+          "restart unstable service if needed",
+          "Verify service recovered"
+        ],
+        "success_criteria": []
+      }
+    },
+    "created_at": 1761578273.9358876,
+    "status": "pending",
+    "human_guidance": null,
+    "resolved_at": null
+  }
+}

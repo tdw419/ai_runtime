@@ -4,8 +4,8 @@ LM Studio Bridge - Connects local AI models to the runtime environment
 import json
 import requests
 from typing import Dict, Any, Optional
-from memory import RuntimeMemory
-from sandbox import SandboxRuntime
+from .memory import RuntimeMemory
+from .sandbox import SandboxRuntime
 
 
 RUNTIME_SYSTEM_PROMPT = """You are an AI development agent operating in a RUNTIME ENVIRONMENT.
