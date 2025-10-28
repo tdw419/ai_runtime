@@ -57,6 +57,27 @@ def print_tree(tree: dict, indent: int = 0):
             print("  " * indent + f"📄 {key}")
 
 
+def choose_response_mode(user_input: str) -> str:
+    text = user_input.strip().lower()
+    build_triggers = [
+        "create ", "add ", "implement ", "modify ",
+        "update ", "refactor ", "write code", "generate code",
+        "write a file", "edit", "append", "in file", "in .py"
+    ]
+    strategy_triggers = [
+        "how do we improve", "how can we improve", "are we okay",
+        "status", "what's going on", "what are you doing",
+        "what should we do next", "how safe is this", "what's the plan"
+    ]
+    if any(kw in text for kw in build_triggers):
+        if "explain" in text or "why" in text or "walk me through" in text:
+            return "chat+plan"
+        return "structured"
+    if any(kw in text for kw in strategy_triggers):
+        return "chat"
+    return "chat"
+
+
 def main():
     print("=" * 60)
     print("   🤖 AI RUNTIME LAUNCHER")
@@ -186,8 +207,16 @@ def main():
                 continue
 
             # Process AI directive
+            mode = choose_response_mode(user_input)
+            if mode == "chat":
+                print("🔄 Thinking...")
+                prompt = session._build_prompt_chat(user_input)
+                response = session._call_lm_studio(prompt)
+                print(f"\n🤖 AI: {response}")
+                continue
+
             print("🔄 Processing...")
-            result = session.step(user_input)
+            result = session.step(user_input, mode)
 
             if not result.get("success"):
                 print(f"\n❌ Step failed: {result.get('error')}")
@@ -196,36 +225,42 @@ def main():
                 continue
 
             # Display results
-            print(f"\n🤖 AI Reasoning: {result['ai_reasoning']}")
-            print(f"🔜 Next Steps: {result['next_steps']}")
+            if "assistant_message" in result:
+                print(f"\n🤖 AI: {result['assistant_message']}")
 
-            # Show execution details
-            print(f"\n📊 Execution Results ({len(result['execution_results'])} actions):")
-            for i, exec_item in enumerate(result["execution_results"], 1):
-                directive = exec_item["directive"]
-                action = directive.get("action")
-                r = exec_item["result"]
-                
-                status = "✅" if r.get("success") else "❌"
-                print(f"\n  {i}. {action} {status}")
-                
-                if "filepath" in r:
-                    print(f"     File: {r['filepath']}")
-                if "message" in r:
-                    print(f"     {r['message']}")
-                if "stdout" in r and r["stdout"].strip():
-                    output = r["stdout"][:150].strip()
-                    if output:
-                        print(f"     Output: {output}...")
-                if "stderr" in r and r["stderr"].strip():
-                    error = r["stderr"][:150].strip()
-                    print(f"     Error: {error}...")
-                if "error" in r and r["error"]:
-                    print(f"     Error: {r['error']}")
+            if "ai_reasoning" in result:
+                print(f"\n🤖 AI Reasoning: {result['ai_reasoning']}")
+            if "next_steps" in result:
+                print(f"🔜 Next Steps: {result['next_steps']}")
 
-            # Show updated project structure
-            print(f"\n📂 Updated Project:")
-            print_tree(result["project_tree"])
+            if "execution_results" in result:
+                print(f"\n📊 Execution Results ({len(result['execution_results'])} actions):")
+                for i, exec_item in enumerate(result["execution_results"], 1):
+                    directive = exec_item["directive"]
+                    action = directive.get("action")
+                    r = exec_item["result"]
+
+                    status = "✅" if r.get("success") else "❌"
+                    print(f"\n  {i}. {action} {status}")
+
+                    if "filepath" in r:
+                        print(f"     File: {r['filepath']}")
+                    if "message" in r:
+                        print(f"     {r['message']}")
+                    if "stdout" in r and r["stdout"].strip():
+                        output = r["stdout"][:150].strip()
+                        if output:
+                            print(f"     Output: {output}...")
+                    if "stderr" in r and r["stderr"].strip():
+                        error = r["stderr"][:150].strip()
+                        print(f"     Error: {error}...")
+                    if "error" in r and r["error"]:
+                        print(f"     Error: {r['error']}")
+
+            if "project_tree" in result:
+                # Show updated project structure
+                print(f"\n📂 Updated Project:")
+                print_tree(result["project_tree"])
             print("=" * 60)
 
         except KeyboardInterrupt:

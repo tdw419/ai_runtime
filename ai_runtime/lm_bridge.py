@@ -5,8 +5,39 @@ import json
 import requests
 from typing import Dict, Any, Optional
 from .memory import RuntimeMemory
-from .sandbox import SandboxRuntime
+from .sandbox_runtime import RuntimeSandbox
+from .code_guard import CodeGuard
 
+
+class SafeDict(dict):
+    """A dictionary that returns '{key}' for missing keys during string formatting."""
+    def __missing__(self, key):
+        return "{" + key + "}"
+
+
+CHAT_PROMPT = """
+You are an AI assistant helping to manage a runtime environment. Respond in natural language to the user's query: {user_input}.
+Summarize the current state, explain any concerns, and suggest next actions. Do not propose file edits or output JSON.
+"""
+
+STRUCTURED_PROMPT = """
+You are a code execution agent. Respond ONLY with valid JSON describing the actions to take for: {user_input}.
+Use this schema: { "action": "edit_file", "filepath": "...", "full_new_contents": "..." } or similar.
+Do not include explanations or non-JSON content.
+"""
+
+CHAT_PLAN_PROMPT = """
+You are an AI assistant managing a runtime environment. For the query: {user_input}, provide:
+1. A brief explanation in natural language summarizing your plan.
+2. A JSON block of intended actions, separated by ```json
+...
+```.
+Example:
+Operator-facing summary: I'm adding caching to improve performance.
+```json
+[{ "action": "edit_file", "filepath": "...", "full_new_contents": "..." }]
+```
+"""
 
 RUNTIME_SYSTEM_PROMPT = """You are an AI development agent operating in a RUNTIME ENVIRONMENT.
 
@@ -65,10 +96,21 @@ class LMStudioRuntimeSession:
         self.memory = RuntimeMemory(memory_db)
         
         # Initialize sandbox runtime
-        self.runtime = SandboxRuntime(project_root, self.memory)
+        self.runtime = RuntimeSandbox(project_root)
+        self.code_guard = CodeGuard(project_root)
         
         # Current step being worked on
         self.current_step_id = None
+        self.task_queue = []
+
+    def _build_prompt_chat(self, user_input: str) -> str:
+        return CHAT_PROMPT.format(user_input=user_input)
+
+    def _build_prompt_structured(self, user_input: str) -> str:
+        return STRUCTURED_PROMPT.format(user_input=user_input)
+
+    def _build_prompt_chatplan(self, user_input: str) -> str:
+        return CHAT_PLAN_PROMPT.format(user_input=user_input)
 
     def _call_lm_studio(self, prompt: str) -> str:
         """Call LM Studio API"""
@@ -153,69 +195,99 @@ Respond with JSON only:
             default_status="active"
         )
         
-        # Create initial step
-        step = self.memory.create_step(
-            module["id"],
-            "Initial Implementation",
-            user_request
-        )
-        
-        print(f"✅ Created module '{module['name']}' and initial step")
-        return {"module": module, "step": step}
+        # Create initial steps
+        for step_title in parsed.get("initial_steps", [user_request]):
+            step = self.memory.create_step(
+                module["id"],
+                step_title,
+                user_request
+            )
+            self.task_queue.append(step)
 
-    def step(self, user_request: str) -> Dict[str, Any]:
+        print(f"✅ Created module '{module['name']}' and initial steps.")
+        return {"module": module, "steps": self.task_queue}
+
+    def step(self, user_request: str, mode: str) -> Dict[str, Any]:
         """Execute one development step"""
         
-        # Get or create step for this request
-        if not self.current_step_id:
-            intake_result = self.intake_mission(user_request)
-            self.current_step_id = intake_result["step"]["id"]
+        if not self.task_queue:
+            self.intake_mission(user_request)
+
+        # Process tasks until the queue is empty or requires input
+        while self.task_queue:
+            current_task = self.task_queue.pop(0)
+            self.current_step_id = current_task['id']
             self.memory.update_step_status(self.current_step_id, "in_progress")
-        
-        # Get current project context
-        context = self.memory.get_context_summary()
-        
-        # Build prompt with context
-        prompt = RUNTIME_SYSTEM_PROMPT.format(
-            context=context,
-            user_request=user_request
-        )
-        
-        # Call LM Studio
-        response = self._call_lm_studio(prompt)
-        
-        # Parse response
-        ai_plan = self._parse_ai_response(response)
-        
-        if not ai_plan:
-            return {
-                "success": False,
-                "error": "Failed to parse AI response as JSON",
-                "raw": response
-            }
-        
-        # Execute directives
-        exec_results = []
-        for directive in ai_plan.get("directives", []):
-            result = self.runtime.execute_directive(directive, self.current_step_id)
-            exec_results.append({
-                "directive": directive,
-                "result": result
-            })
-        
-        # Check if step is complete
-        all_successful = all(r["result"].get("success", False) for r in exec_results)
-        if all_successful and "next_steps" in ai_plan:
-            # Mark current step as done, clear current_step_id for next iteration
-            self.memory.update_step_status(self.current_step_id, "done")
-            self.current_step_id = None
-        
+
+            # Get current project context
+            context = self.memory.get_context_summary()
+
+            # Build prompt with context
+            if mode == "structured":
+                prompt = self._build_prompt_structured(user_request)
+            elif mode == "chat+plan":
+                prompt = self._build_prompt_chatplan(user_request)
+            else: # default to structured
+                prompt_vars = SafeDict(
+                    context=context,
+                    user_request=f"Current task: {current_task['title']}\n\nOverall goal: {user_request}"
+                )
+                prompt = RUNTIME_SYSTEM_PROMPT.format_map(prompt_vars)
+
+            # Call LM Studio
+            response = self._call_lm_studio(prompt)
+
+            # Parse response
+            ai_plan = self._parse_ai_response(response)
+
+            if not ai_plan:
+                # Put task back in queue and report error
+                self.task_queue.insert(0, current_task)
+                return {
+                    "success": False,
+                    "error": "Failed to parse AI response as JSON",
+                    "raw": response
+                }
+
+            # Execute directives
+            exec_results = []
+            all_successful = True
+            for directive in ai_plan.get("directives", []):
+                action = directive.get("action")
+                parameters = directive.get("parameters", {})
+                result = {}
+
+                if action == "edit_file":
+                    result = self.code_guard.apply_edit(
+                        parameters.get("filepath"),
+                        parameters.get("full_new_contents")
+                    )
+                elif action == "run_python_file":
+                    result = self.runtime.run_python_file(parameters.get("filepath"))
+                # Add other actions here
+                else:
+                    result = {"success": False, "error": f"Unknown action: {action}"}
+
+                exec_results.append({
+                    "directive": directive,
+                    "result": result
+                })
+                if not result.get("success"):
+                    all_successful = False
+
+            if all_successful:
+                self.memory.update_step_status(self.current_step_id, "done")
+            else:
+                self.memory.update_step_status(self.current_step_id, "blocked")
+                # Stop processing if a step fails
+                break
+
         return {
             "success": True,
-            "ai_reasoning": ai_plan.get("reasoning", ""),
-            "next_steps": ai_plan.get("next_steps", ""),
-            "execution_results": exec_results,
-            "project_tree": self.runtime.project_tree()["tree"],
+            "ai_reasoning": "Completed a sequence of autonomous steps.",
+            "next_steps": "Ready for next user input, or continuing with remaining tasks.",
+            "execution_results": [], # This would need to be aggregated if we want to show all results
+            "project_tree": self.runtime.project_tree(),
         }
 
     def get_status(self) -> Dict[str, Any]:

@@ -31,7 +31,9 @@ def test_imports():
         requests_ok = False
     
     try:
-        from ai_runtime import RuntimeMemory, SandboxRuntime, LMStudioRuntimeSession
+        from .memory import RuntimeMemory
+        from .sandbox_runtime import RuntimeSandbox
+        from .lm_bridge import LMStudioRuntimeSession
         print("   ✅ ai_runtime package")
         runtime_ok = True
     except ImportError as e:
@@ -83,7 +85,7 @@ def test_database():
     print("\n🔍 Testing database functionality...")
     
     try:
-        from ai_runtime import RuntimeMemory
+        from .memory import RuntimeMemory
         import tempfile
         
         # Create temp database
@@ -128,7 +130,8 @@ def test_sandbox():
     print("\n🔍 Testing sandbox runtime...")
     
     try:
-        from ai_runtime import RuntimeMemory, SandboxRuntime
+        from .memory import RuntimeMemory
+        from .sandbox_runtime import RuntimeSandbox
         import tempfile
         
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -136,10 +139,10 @@ def test_sandbox():
             memory = RuntimeMemory(db_path)
             
             project_root = os.path.join(tmpdir, "project")
-            runtime = SandboxRuntime(project_root, memory)
+            runtime = RuntimeSandbox(project_root)
             
             # Test file creation
-            result = runtime.create_file("test.txt", "Hello, World!")
+            result = runtime.write_file("test.txt", "Hello, World!")
             if not result["success"]:
                 print(f"   ❌ File creation failed: {result.get('error')}")
                 return False
