@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 # zero_human_interface.py — AI-native system with Explorer and Pixel Database Prep
 # This file contains the complete fusion of all 7 modules + PixelDB prep.
-import os, json, time, sqlite3, zlib, uuid, random, binascii, hashlib, numpy as np, argparse, asyncio
+import os, json, time, sqlite3, zlib, uuid, random, struct, binascii, hashlib, numpy as np, argparse, asyncio
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
-from collections import defaultdict, Counter
+from collections import defaultdict, Counter, deque
 from abc import ABC, abstractmethod
 import requests
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image, ImageDraw, PngImagePlugin
+from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
+from menu_builder_v1 import build_menu_ir, default_palette, default_captests
 
 # Configuration & Paths
 BASE = Path(os.getcwd()).resolve()
@@ -160,17 +161,17 @@ class PixelOSBridge:
         self.color_lang = color_lang
         self.opcodes = ["PLOT", "RECT", "WRITE_TEXT", "IF_CLICK_AT", "JUMP", "LABEL"]
         self.sequence = 0
-        self._seen_sha8 = set()
 
     def emit(self, pxl_ir: PXLIR, name: str, obj_id: str) -> str:
         self.sequence += 1
         ir_dict = {"width": pxl_ir.width, "height": pxl_ir.height, "tiles": [{"opcode": t.opcode, "args": t.args, "color_role": t.color_role} for t in pxl_ir.tiles]}
         ir_json = json.dumps(ir_dict, sort_keys=True, separators=(',',':'))
         sha8 = hashlib.sha256(ir_json.encode()).hexdigest()[:8]
-        if sha8 in self._seen_sha8:
+        if hasattr(self, "_seen_sha8") and sha8 in self._seen_sha8:
             path = CARTRIDGES / f"{obj_id.split(':')[1]}.{sha8}.png"
             return str(path)
-        self._seen_sha8.add(sha8)
+        if hasattr(self, "_seen_sha8"):
+            self._seen_sha8.add(sha8)
         palette = self.color_lang.palette
         captests = {"version": 1, "tests": [{"name": "has_label_resolution", "expect": True}, {"name": "has_click_if", "expect": True}]}
         path = CARTRIDGES / f"{sha8}_{name}.png"
@@ -213,9 +214,9 @@ class PixelOSBridge:
 class Judge:
     def __init__(self):
         self.opcodes = ["PLOT", "RECT", "WRITE_TEXT", "IF_CLICK_AT", "JUMP", "LABEL"]
-
     def run(self, pid: str, tests: Dict, store: Store) -> Dict:
-        program = store.get("program", (pid.split('@')[0].split(':')[1] if ':' in pid else pid)); tiles = program["body"]["tiles"]
+        program = store.get("program", (pid.split('@')[0].split(':')[1] if ':' in pid else pid))
+        tiles = program["body"]["tiles"]
         has_text = any(t["opcode"] == "WRITE_TEXT" for t in tiles); labels = {t["args"]["name"] for t in tiles if t["opcode"] == "LABEL" and "name" in t["args"]}
         has_valid_click = all(t["args"].get("target_true") in labels and t["args"].get("target_false") in labels for t in tiles if t["opcode"] == "IF_CLICK_AT")
         has_valid_jump = all(t["args"].get("target") in labels for t in tiles if t["opcode"] == "JUMP")
@@ -233,6 +234,64 @@ class HumanTranslator:
             return f"Thought: {meta.get('goal', 'Unknown goal')}."
         return meta.get("summary", "AI object under development.")
 
+class MemoryBuilder:
+    def __init__(self, store: Store, color_lang: ColorLanguage):
+        self.store = store
+        self.color_lang = color_lang
+        self._roles = ["logic", "memory", "learn", "act", "meta", "io"]
+        self._recent_goals = deque(maxlen=8)  # Track last 8 synthesized goals
+
+    def analyze_thoughts(self, limit: int = 100) -> Dict[str, Any]:
+        """Analyze stored thoughts to understand current system state."""
+        thoughts = self.store.scan("thought", limit=limit)
+        color_dist = Counter()
+        complexities = []
+        goals = []
+        for thought in thoughts:
+            color_dist[thought["meta"].get("type", "meta")] += 1
+            complexities.append(thought["body"].get("complexity", 0.0))
+            goals.append(thought["body"]["goal"])
+        return {
+            "thought_count": len(thoughts),
+            "color_distribution": dict(color_dist),
+            "avg_complexity": sum(complexities) / len(complexities) if complexities else 0.0,
+            "goals": goals
+        }
+
+    def synthesize_goal(self) -> Dict[str, Any]:
+        """Synthesize a new goal by retrieving and combining similar thoughts."""
+        state = self.analyze_thoughts()
+        # Select a target role (least used for balance)
+        usage = state.get("color_distribution", {})
+        target_role = min(self._roles, key=lambda r: usage.get(r, 0)) if usage else random.choice(self._roles)
+        # Query similar thoughts using pixel grid
+        target_grid = self.color_lang.generate_pixel_grid(target_role)
+        similar_oids = self.store.query_pixel(target_grid, threshold=0.2)
+        # Retrieve up to 3 similar thoughts
+        similar_thoughts = [self.store.get("thought", oid.split(':')[1]) for oid in similar_oids[:3]]
+        # Synthesize goal from similar thoughts
+        templates = {
+            "logic": "Enhance control-flow with {concept} and dynamic jumps",
+            "memory": "Implement persistent state with {concept} and named registers",
+            "learn": "Develop adaptive {concept} capability with feedback loops",
+            "act": "Create interactive {concept} with click-driven branches",
+            "meta": "Add self-referential {concept} with dynamic status display",
+            "io": "Integrate external {concept} with input/output routing"
+        }
+        # Combine goals or use fallback
+        if similar_thoughts:
+            concepts = [thought["body"]["goal"].split()[-1] for thought in similar_thoughts if thought]
+            concept = random.choice(concepts) if concepts else "system"
+            goal = templates[target_role].format(concept=concept)
+        else:
+            goal = templates[target_role].format(concept="system")
+        # Avoid recent repeats
+        if goal in self._recent_goals:
+            goal = f"{goal} v{random.randint(2, 9)}"
+        self._recent_goals.append(goal)
+        complexity = min(0.85, max(0.35, state.get("avg_complexity", 0.5) * 0.8))
+        return {"goal": goal, "type": target_role, "complexity": complexity}
+
 class ExplorerAgent:
     def __init__(self, store: Store):
         self.store = store
@@ -248,6 +307,10 @@ class ExplorerAgent:
         return {"thought_count": len(thoughts), "program_count": len(programs), "color_distribution": dict(color_dist), "avg_complexity": sum(complexities) / len(complexities) if complexities else 0.0}
 
     def propose_goal(self) -> Dict[str, Any]:
+        state = self.analyze_system()
+        # Use MemoryBuilder if available and thoughts exist
+        if self.shell.memory_builder and state["thought_count"] > 5:
+            return self.shell.memory_builder.synthesize_goal()
         # Prefer LLM, gracefully fall back to rotating goals
         system = "You are an Explorer agent. Return a compact JSON with keys: goal, type, complexity."
         prompt = "Propose the next compact capability to explore. Keep it atomic."
@@ -273,10 +336,12 @@ class AIShell:
         self.pixel_bridge = PixelOSBridge(self.color_lang)
         self.explorer = ExplorerAgent(self.store)
         self.explorer.shell = self
+        self.memory_builder = MemoryBuilder(self.store, self.color_lang)
         self.iteration = 0
         self.meta_learning_index = 0.3
         self.improvement_velocity = 0.5
         self.complexity = 0.0
+        self._seen_sha8 = set()  # for cartridge de-dupe
 
     # --- rotating fallback, prefers underused roles ---
     def _fallback_goal(self) -> dict:
@@ -359,7 +424,7 @@ class AIShell:
         return self.think(goal["goal"], {"source": "explorer", "type": goal["type"], "complexity": goal["complexity"]})
 
     def explain(self, oid: str) -> str:
-        return self.translator.to_human(self.store.get(oid.split(':')[0], (oid.split('@')[0].split(':')[1] if ':' in oid else oid)))
+        return self.translator.to_human(self.store.get(oid.split(':')[0], oid.split(':')[1]))
 
     def update_metrics(self, complexity: float):
         self.iteration += 1
