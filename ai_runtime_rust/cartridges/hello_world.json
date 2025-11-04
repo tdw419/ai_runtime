@@ -1,0 +1,12 @@
+{
+  "id": "hello_world",
+  "name": "Hello World",
+  "description": "Basic greeting cartridge demonstrating text output",
+  "code": "print(\"Hello, Sovereign AI!\")",
+  "version": "1.0.0",
+  "author": "system",
+  "tags": [
+    "demo",
+    "basic"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "matrix_display",
+  "name": "Matrix Display",
+  "description": "Generates ASCII rain for the glyph expander",
+  "code": "generate_matrix_rain(128, 64)",
+  "version": "1.0.0",
+  "author": "system",
+  "tags": [
+    "display",
+    "demo"
+  ]
+}
