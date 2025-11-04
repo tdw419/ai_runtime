@@ -1,0 +1,11 @@
+habits:
+  morning_routine:
+    time: "09:00"
+    actions:
+      - "open_daily_tools"
+      - "check_calendar"
+  evening_shutdown:
+    time: "18:00"
+    actions:
+      - "archive_logs"
+      - "run_backups"

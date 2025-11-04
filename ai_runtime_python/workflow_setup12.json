@@ -1,0 +1,45 @@
+{
+  "name": "workspace_setup",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "workspace-setup",
+        "responseMode": "onReceived"
+      },
+      "id": "webhook-1234",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [300, 300],
+      "webhookId": "workspace-setup"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "respond-1234",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [600, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0
+}

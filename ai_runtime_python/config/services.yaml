@@ -1,0 +1,49 @@
+# n8n Configuration
+n8n:
+  base_url: "http://localhost:5678"
+  webhooks:
+    system_optimization: "/webhook/system-optimization"
+    workspace_setup: "/webhook/workspace-setup"
+    security_response: "/webhook/security-response"
+    daily_setup: "/webhook/daily-setup"
+  # auth_token: "your-n8n-token"
+
+notifications:
+  email:
+    enabled: true
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    username: "your-email@gmail.com"
+    password: "your-app-password"
+    from_addr: "your-email@gmail.com"
+    to_addr: "alerts@yourcompany.com"
+  slack:
+    enabled: true
+    webhook_url: "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+  webhook:
+    enabled: false
+    url: "https://your-webhook-endpoint.com/alerts"
+    # auth_token: "optional"
+
+llm:
+  base_url: "http://localhost:1234/v1"
+  model: "codellama-7b-instruct.q4_K_M"
+  temperature: 0.3
+  max_tokens: 512
+
+applications:
+  - name: "web_server"
+    process_names:
+      - "nginx"
+      - "apache2"
+      - "httpd"
+  - name: "database"
+    process_names:
+      - "postgres"
+      - "mysqld"
+      - "mongod"
+  - name: "app_server"
+    process_names:
+      - "python3"
+      - "node"
+      - "java"

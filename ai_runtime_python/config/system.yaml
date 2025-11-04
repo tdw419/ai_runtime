@@ -1,0 +1,91 @@
+# System Safety Thresholds (Adjust for your machine)
+thresholds:
+  cpu:
+    warning: 70
+    critical: 85
+    action: "optimize_processes"
+  memory:
+    warning: 80
+    critical: 90
+    action: "clear_memory"
+  disk:
+    warning: 85
+    critical: 95
+    action: "cleanup_disk"
+  temperature:
+    warning: 70
+    critical: 85
+    action: "cool_system"
+
+work_hours:
+  start: "09:00"
+  end: "18:00"
+  timezone: "America/New_York"
+
+preferred_tools:
+  - "Code"
+  - "Terminal"
+  - "Chrome"
+  - "Slack"
+  - "Figma"
+
+intervals:
+  system_metrics: 5
+  user_activity: 30
+  workflow_check: 60
+  security_scan: 300
+
+n8n:
+  enabled: false  # Disable n8n entirely
+
+lm_studio:
+  base_url: "http://localhost:1234/v1"
+  model: "local-model"
+  temperature: 0.1
+  max_tokens: 500
+
+direct_actions:
+  allowed_services: ["nginx", "redis-server", "postgresql", "mysql", "docker"]
+  max_risk_level: "medium"
+  require_confirmation: false
+
+performance:
+  profiling_enabled: true
+  py_spy_path: "py-spy"
+  profile_interval: 3600  # Profile every hour
+
+security:
+  blocked_commands:
+    - "rm -rf"
+    - "dd if="
+    - "mkfs"
+    - "format"
+    - "passwd"
+    - "chmod 777"
+  require_llm_validation: true
+  max_fix_risk_level: 0.8
+
+vulnerability:
+  nvd_api_key: ""  # Optional API key for higher rate limits
+  epss_enabled: true
+  min_epss_attention: 0.1  # Only prioritize vulnerabilities with >10% EPSS
+
+jira:
+  enabled: false
+  base_url: "https://your-company.atlassian.net"
+  username: "your-username"
+  password: "your-api-token"
+  project_key: "AI"
+
+logging:
+  structured_enabled: true
+  retention_days: 30
+  max_file_size_mb: 100
+
+projects:
+  - path: "~/zion/projects/ai_runtime"
+    name: "AI Runtime Daemon"
+    watch_patterns: ["*.py", "*.yaml", "*.sh"]
+    auto_fix: true
+    backup_changes: true
+    max_auto_fix_severity: "medium"

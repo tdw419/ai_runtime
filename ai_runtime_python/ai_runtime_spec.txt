@@ -1,0 +1,1 @@
+i want this to help us build our gpu computer / pxos and i think the best way to do that would be to allow the ai to continuous loop, have access to a database where it could store, update, and test code in  a fake database command prompt.

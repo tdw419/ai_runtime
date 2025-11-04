@@ -1,0 +1,70 @@
+{
+  "name": "workspace_setup",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "workspace-setup",
+        "responseMode": "responseNode"
+      },
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "workspace-setup"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process workspace setup request\nconst { daemonId, timestamp, context } = $input.first().json;\n\n// Log the request\nconsole.log('Workspace setup triggered by daemon:', daemonId);\n\n// Example workspace setup actions\nconst setupActions = {\n  create_directories: [\n    '/workspace/projects',\n    '/workspace/data',\n    '/workspace/logs'\n  ],\n  set_permissions: {\n    base_path: '/workspace',\n    mode: '755'\n  },\n  initialize_services: [\n    'code-server',\n    'filebrowser',\n    'jupyter'\n  ]\n};\n\n// Return response\nreturn {\n  success: true,\n  message: 'Workspace setup initiated',\n  actions: setupActions,\n  timestamp: new Date().toISOString(),\n  requestId: daemonId\n};"
+      },
+      "id": "b2c3d4e5-f6g7-8901-bcde-f23456789012",
+      "name": "Process Setup Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "c3d4e5f6-g7h8-9012-cdef-345678901234",
+      "name": "Setup Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [760, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Process Setup Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Setup Request": {
+      "main": [
+        [
+          {
+            "node": "Setup Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}
